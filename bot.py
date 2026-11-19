@@ -571,10 +571,10 @@ async def admin_channel_stats(cb: CallbackQuery):
         await cb.message.edit_text(f"❌ Ошибка!\nБот должен быть админом в канале.\n<code>{e}</code>", reply_markup=admin_menu(maint))
     await cb.answer()
 
-async def main():
-    await init_db()
-    for code, reward, uses in DEFAULT_PROMOS: await create_promo(code, reward, uses)
-    await dp.start_polling(bot)
-
+ async def main():
+     await init_db()
+     for code, reward, uses in DEFAULT_PROMOS: await create_promo(code, reward, uses)
+     await bot.delete_webhook(drop_pending_updates=True)
+     await dp.start_polling(bot) 
 if __name__ == "__main__":
     asyncio.run(main())
