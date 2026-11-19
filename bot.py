@@ -309,14 +309,14 @@ async def promo_check(message: Message, state: FSMContext):
     code = message.text.upper().strip()
     await state.clear()
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT reward, uses_left FROM promo_codes WHERE code = ?", (code,)) as cur:
+    async with db.execute("SELECT reward, uses_left FROM promo_codes WHERE code = ?", (code,)) as cur:
             promo = await cur.fetchone()
         if not promo or promo[1] <= 0:
             return await message.answer("❌ Неверный или использованный промокод.", reply_markup=main_menu())
             
-        await db.execute("UPDATE promo_codes SET uses_left = uses_left - 1 WHERE code = ?", (code,))
-        await db.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (promo[0], message.from_user.id))
-        await db.commit()
+    await db.execute("UPDATE promo_codes SET uses_left = uses_left - 1 WHERE code = ?", (code,))
+    await db.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (promo[0], message.from_user.id))
+    await db.commit()
     await message.answer(f"✅ Активирован! Получено {promo[0]} монет.", reply_markup=main_menu())
 
 @dp.message(Command("admin"))
