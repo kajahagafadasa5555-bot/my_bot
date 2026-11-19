@@ -239,6 +239,13 @@ async def start_cmd(message: Message):
     if referrer_id == u.id: referrer_id = None
     await add_user(u.id, u.username or "", u.full_name, referrer_id)
     user = await get_user(u.id)
+
+# ВСТАВИТЬ ЭТИ 3 СТРОКИ:
+if user is None:
+    await add_user(u.id, u.username or "", u.full_name, referrer_id)
+    user = await get_user(u.id)
+
+# Теперь user точно есть, и код ниже 
     await message.answer(f"👋 <b>Привет, {u.full_name}!</b>\n\n💰 Монеты: <b>{user[3]}</b>\n💎 Коэны: <b>{user[4]}</b>\n\nВыбери действие 👇", reply_markup=main_menu())
 
 @dp.callback_query(F.data == "back_main")
