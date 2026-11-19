@@ -13,7 +13,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 # ================= КОНФИГ =================
-BOT_TOKEN = "9233529693:AAGxOLdEtBiI6eM-rE3vpjHRwHMDoFsAyzs"
+BOT_TOKEN = "9233529693:AAGCJvIMICxQIwAjLI97NyiNhYGg4WCZn2k"
 ADMIN_IDS = [84007999305]
 CHANNEL_ID = "@casehab"
 CHANNEL_LINK = "https://t.me/casehab"
