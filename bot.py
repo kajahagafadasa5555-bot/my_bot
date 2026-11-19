@@ -43,7 +43,6 @@ async def init_db():
         await db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('maintenance', 'False')")
         await db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('panic', 'False')")
         await db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('bj_chance', '20')")
-        await db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('bj_big_bet', '100')")
         await db.commit()
 
 async def get_setting(key):
@@ -97,7 +96,7 @@ async def add_hr_log(admin_id, action, details=""):
         await db.execute("INSERT INTO hr_logs (admin_id, action, details, timestamp) VALUES (?, ?, ?, ?)", (admin_id, action, details, datetime.datetime.now().isoformat()))
         await db.commit()
 
-# ================= КЕЙСЫ И МАТЕМАТИКА =================
+# ================= КЕЙСЫ =================
 CASES = {
     "poor": {"name": "🥺 Нищий", "price": 15, "coin_price": 5, "items": [("2 звезды", "common", 2, 70), ("5 звезд", "rare", 5, 25), ("20 звезд", "epic", 20, 5)]},
     "rich": {"name": "👑 Богатый", "price": 100, "coin_price": 30, "items": [("10 звезд", "common", 10, 60), ("50 звезд", "rare", 50, 30), ("NFT", "epic", 500, 10)]}
@@ -149,6 +148,8 @@ class AdminState(StatesGroup):
     waiting_bj_chance = State()
     waiting_ban_id = State()
     waiting_ban_reason = State()
+
+# ================= ПОЛЬЗОВАТЕЛЬСКИЕ ХЭНДЛЕРЫ =================
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     if await get_setting("maintenance") == "True" and await get_admin_rank(message.from_user.id) == 0:
@@ -298,7 +299,8 @@ async def play_game(message: Message, state: FSMContext):
     else:
         await upd_bal(message.from_user.id, -bet)
         await message.answer(f"😢 Проигрыш. Вы потеряли {bet} монет.", reply_markup=main_menu())
-        @dp.callback_query(F.data == "promo")
+
+@dp.callback_query(F.data == "promo")
 async def promo_enter(cb: CallbackQuery, state: FSMContext):
     await cb.message.edit_text("🔑 Введите промокод:", reply_markup=back_btn())
     await state.set_state(UserState.waiting_promo)
@@ -309,16 +311,17 @@ async def promo_check(message: Message, state: FSMContext):
     code = message.text.upper().strip()
     await state.clear()
     async with aiosqlite.connect(DB_PATH) as db:
-    async with db.execute("SELECT reward, uses_left FROM promo_codes WHERE code = ?", (code,)) as cur:
+        async with db.execute("SELECT reward, uses_left FROM promo_codes WHERE code = ?", (code,)) as cur:
             promo = await cur.fetchone()
         if not promo or promo[1] <= 0:
             return await message.answer("❌ Неверный или использованный промокод.", reply_markup=main_menu())
             
-    await db.execute("UPDATE promo_codes SET uses_left = uses_left - 1 WHERE code = ?", (code,))
-    await db.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (promo[0], message.from_user.id))
-    await db.commit()
+        await db.execute("UPDATE promo_codes SET uses_left = uses_left - 1 WHERE code = ?", (code,))
+        await db.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (promo[0], message.from_user.id))
+        await db.commit()
     await message.answer(f"✅ Активирован! Получено {promo[0]} монет.", reply_markup=main_menu())
 
+# ================= АДМИН-ПАНЕЛЬ =================
 @dp.message(Command("admin"))
 async def admin_cmd(message: Message):
     rank = await get_admin_rank(message.from_user.id)
@@ -458,7 +461,8 @@ async def deny_give(cb: CallbackQuery):
     if cb.from_user.id != ADMIN_IDS[0]: return
     await cb.message.edit_text("❌ Запрос отклонен.")
     await cb.answer("Отклонено.")
-    @dp.callback_query(F.data == "admin_odds")
+
+@dp.callback_query(F.data == "admin_odds")
 async def admin_odds(cb: CallbackQuery, state: FSMContext):
     if await get_admin_rank(cb.from_user.id) != 3: return
     await cb.message.edit_text("Введите новый шанс Блэкджека (в %):", reply_markup=back_btn("close_admin"))
