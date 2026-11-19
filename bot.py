@@ -3,7 +3,9 @@ import logging
 import datetime
 import random
 import string
+import os
 import aiosqlite
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, PreCheckoutQuery, LabeledPrice
@@ -13,6 +15,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 # ================= КОНФИГ =================
+# ВСТАВЬТЕ СЮДА ВАШ НОВЫЙ ТОКЕН!
 BOT_TOKEN = "9233529693:AAEpoXbe3nWMG-ULm-HOnt5_BKmq-O0hdbU"
 ADMIN_IDS = [84007999305]
 CHANNEL_ID = "@casehab"
@@ -568,11 +571,24 @@ async def admin_channel_stats(cb: CallbackQuery):
         await cb.message.edit_text(f"❌ Ошибка!\nБот должен быть админом в канале.\n<code>{e}</code>", reply_markup=admin_menu(maint))
     await cb.answer()
 
+# ================= ВЕБ-СЕРВЕР ДЛЯ RENDER =================
+async def web_server():
+    app = web.Application()
+    app.router.add_get('/', lambda r: web.Response(text="Bot is alive!"))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+
 async def main():
     await init_db()
     for code, reward, uses in DEFAULT_PROMOS: 
         await create_promo(code, reward, uses)
     await bot.delete_webhook(drop_pending_updates=True)
+    
+    # Запускаем мини-сервер и бота одновременно
+    asyncio.create_task(web_server())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
