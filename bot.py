@@ -17,7 +17,7 @@ from aiogram.fsm.state import State, StatesGroup
 # ================= КОНФИГ =================
 # ВСТАВЬТЕ СЮДА ВАШ НОВЫЙ ТОКЕН!
 BOT_TOKEN = "9233529693:AAEpoXbe3nWMG-ULm-HOnt5_BKmq-O0hdbU"
-ADMIN_IDS = [84007999305]
+ADMIN_IDS = [8400799305]
 CHANNEL_ID = "@casehab"
 CHANNEL_LINK = "https://t.me/casehab"
 
