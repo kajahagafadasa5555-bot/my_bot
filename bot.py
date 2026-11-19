@@ -13,12 +13,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 # ================= КОНФИГ =================
-# СМЕНИ ТОКЕН В BOTFATHER!
 BOT_TOKEN = "9233529693:AAGxOLdEtBiI6eM-rE3vpjHRwHMDoFsAyzs"
 ADMIN_IDS = [84007999305]
-
-# Твой канал
-CHANNEL_ID = "@casehab" 
+CHANNEL_ID = "@casehab"
 CHANNEL_LINK = "https://t.me/casehab"
 
 # ================= БАЗА ДАННЫХ =================
@@ -545,7 +542,7 @@ async def admin_broadcast_send(message: Message, state: FSMContext):
 async def admin_channel_post_prompt(cb: CallbackQuery, state: FSMContext):
     if cb.from_user.id not in ADMIN_IDS: return
     await state.set_state(AdminState.waiting_channel_post)
-    await cb.message.edit_text("📝 <b>Пост в канал</b>\n\nОтправь текст поста (можно с HTML-разметкой: <b>жирный</b>, <i>курсив</i>, <a href='...'>ссылки</a>):", reply_markup=back_button())
+    await cb.message.edit_text("📝 <b>Пост в канал</b>\n\nОтправь текст поста:", reply_markup=back_button())
     await cb.answer()
 
 @dp.message(AdminState.waiting_channel_post)
@@ -571,10 +568,12 @@ async def admin_channel_stats(cb: CallbackQuery):
         await cb.message.edit_text(f"❌ Ошибка!\nБот должен быть админом в канале.\n<code>{e}</code>", reply_markup=admin_menu(maint))
     await cb.answer()
 
- async def main():
-     await init_db()
-     for code, reward, uses in DEFAULT_PROMOS: await create_promo(code, reward, uses)
-     await bot.delete_webhook(drop_pending_updates=True)
-     await dp.start_polling(bot) 
+async def main():
+    await init_db()
+    for code, reward, uses in DEFAULT_PROMOS: 
+        await create_promo(code, reward, uses)
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot)
+
 if __name__ == "__main__":
     asyncio.run(main())
