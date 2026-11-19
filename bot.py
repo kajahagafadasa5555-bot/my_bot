@@ -149,7 +149,7 @@ class AdminState(StatesGroup):
     waiting_bj_chance = State()
     waiting_ban_id = State()
     waiting_ban_reason = State()
-    @dp.message(CommandStart())
+@dp.message(CommandStart())
 async def cmd_start(message: Message):
     if await get_setting("maintenance") == "True" and await get_admin_rank(message.from_user.id) == 0:
         return await message.answer("🛠 <b>На боте проводятся технические работы.</b>")
