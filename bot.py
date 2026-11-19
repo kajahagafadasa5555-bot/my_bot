@@ -20,6 +20,8 @@ ADMIN_IDS = [8400799305]
 CHANNEL_ID = "@casehab"
 CHANNEL_LINK = "https://t.me/casehab"
 CONTACT_ADMIN = "@drag_monster_zl"
+CARD_NUMBER = "9112 3801 7930 6727" 
+CARD_BANK = "Беларусь Банк"
 DB_PATH = "bot.db"
 
 logging.basicConfig(level=logging.INFO)
@@ -35,7 +37,6 @@ async def init_db():
         await db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
         await db.execute("CREATE TABLE IF NOT EXISTS admins (user_id INTEGER PRIMARY KEY, rank INTEGER DEFAULT 1)")
         await db.execute("CREATE TABLE IF NOT EXISTS promo_codes (code TEXT PRIMARY KEY, reward INTEGER, uses_left INTEGER)")
-        await db.execute("CREATE TABLE IF NOT EXISTS pending_requests (id INTEGER PRIMARY KEY AUTOINCREMENT, admin_id INTEGER, target_id INTEGER, amount INTEGER, req_type TEXT, status TEXT DEFAULT 'pending')")
         await db.execute("CREATE TABLE IF NOT EXISTS hr_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, admin_id INTEGER, action TEXT, details TEXT, timestamp TEXT)")
         await db.execute("CREATE TABLE IF NOT EXISTS bans (user_id INTEGER PRIMARY KEY, reason TEXT)")
         
@@ -96,10 +97,33 @@ async def add_hr_log(admin_id, action, details=""):
         await db.execute("INSERT INTO hr_logs (admin_id, action, details, timestamp) VALUES (?, ?, ?, ?)", (admin_id, action, details, datetime.datetime.now().isoformat()))
         await db.commit()
 
-# ================= КЕЙСЫ =================
+# ================= КЕЙСЫ (ФЕЙК + РЕАЛЬНОСТЬ) =================
 CASES = {
-    "poor": {"name": "🥺 Нищий", "price": 15, "coin_price": 5, "items": [("2 звезды", "common", 2, 70), ("5 звезд", "rare", 5, 25), ("20 звезд", "epic", 20, 5)]},
-    "rich": {"name": "👑 Богатый", "price": 100, "coin_price": 30, "items": [("10 звезд", "common", 10, 60), ("50 звезд", "rare", 50, 30), ("NFT", "epic", 500, 10)]}
+    "poor": {
+        "name": "🥺 Нищий кейс", "price": 15, "coin_price": 5,
+        "items": [
+            ("2 звезды", "common", 2, 70, "50%"), 
+            ("5 звезд", "rare", 5, 25, "30%"), 
+            ("20 звезд", "epic", 20, 5, "20%")
+        ]
+    },
+    "rich": {
+        "name": "👑 Богатый кейс", "price": 100, "coin_price": 30,
+        "items": [
+            ("10 звезд", "common", 10, 60, "50%"), 
+            ("50 звезд", "rare", 50, 30, "40%"), 
+            ("NFT Кубок", "epic", 500, 10, "10%")
+        ]
+    },
+    "nft": {
+        "name": "💎 NFT Кейс", "price": 700, "coin_price": 250,
+        "items": [
+            ("25 звезд", "common", 25, 70, "60%"), 
+            ("50 звезд", "rare", 50, 20, "30%"), 
+            ("Сердечко", "epic", 200, 9, "9%"), 
+            ("ТОП NFT", "legendary", 5000, 1, "1%")
+        ]
+    }
 }
 
 def open_case(key):
@@ -114,7 +138,10 @@ def main_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎁 Кейсы", callback_data="cases"), InlineKeyboardButton(text="🎮 Игры", callback_data="games")],
         [InlineKeyboardButton(text="🎒 Инвентарь", callback_data="inv"), InlineKeyboardButton(text="👤 Профиль", callback_data="prof")],
-        [InlineKeyboardButton(text="🔑 Промокод", callback_data="promo"), InlineKeyboardButton(text="👥 Рефералы", callback_data="ref")]
+        [InlineKeyboardButton(text="💎 Купить Коэны", callback_data="buy_coins")],
+        [InlineKeyboardButton(text="🏆 Топ игроков", callback_data="top_players")],
+        [InlineKeyboardButton(text="🔑 Промокод", callback_data="promo"), InlineKeyboardButton(text="👥 Рефералы", callback_data="ref")],
+        [InlineKeyboardButton(text="ℹ️ О боте и правах", callback_data="about")] # НОВАЯ КНОПКА
     ])
 
 def back_btn(cb="back_main"):
@@ -122,12 +149,13 @@ def back_btn(cb="back_main"):
 
 def admin_menu(rank):
     kb = []
+    kb.append([InlineKeyboardButton(text="📜 Мои права и лимиты", callback_data="my_rights")]) # НОВАЯ КНОПКА
     if rank >= 2:
         kb.append([InlineKeyboardButton(text="🎁 Проверить купон", callback_data="admin_coupon")])
         kb.append([InlineKeyboardButton(text="🔑 Создать промо", callback_data="admin_promo")])
         kb.append([InlineKeyboardButton(text="🚫 Наказания", callback_data="admin_bans")])
     if rank == 3:
-        kb.append([InlineKeyboardButton(text="💰 Выдать валюту", callback_data="admin_give")])
+        kb.append([InlineKeyboardButton(text="💰 Выдать валюту", callback_data="admin_give_menu")])
         kb.append([InlineKeyboardButton(text="🚨 Паника", callback_data="admin_panic"), InlineKeyboardButton(text="🛠 Тех.работы", callback_data="admin_maint")])
         kb.append([InlineKeyboardButton(text="👥 HR-Панель", callback_data="admin_staff")])
         kb.append([InlineKeyboardButton(text="⚙️ Шансы БД", callback_data="admin_odds")])
@@ -137,6 +165,7 @@ def admin_menu(rank):
 class UserState(StatesGroup):
     waiting_promo = State()
     waiting_bet = State()
+    waiting_coin_amount = State()
 
 class AdminState(StatesGroup):
     waiting_coupon = State()
@@ -174,29 +203,74 @@ async def back_main(cb: CallbackQuery):
     await cb.message.edit_text(f"🏠 <b>Главное меню</b>\n\n💰 Баланс: <b>{user[3]}</b>\n💎 Коэны: <b>{user[4]}</b>", reply_markup=main_menu())
     await cb.answer()
 
-@dp.callback_query(F.data == "prof")
-async def prof(cb: CallbackQuery):
-    user = await get_user(cb.from_user.id)
-    await cb.message.edit_text(f"👤 Профиль\n\n💰 Баланс: {user[3]}\n💎 Коэны: {user[4]}\n👥 Рефералы: {user[6]}/3", reply_markup=back_btn())
+# --- О БОТЕ ---
+@dp.callback_query(F.data == "about")
+async def about_bot(cb: CallbackQuery):
+    text = (
+        "ℹ️ <b>О боте CaseHab</b>\n\n"
+        "Этот бот создан для открытия кейсов и игр.\n\n"
+        "👑 <b>Права администрации:</b>\n"
+        "• <b>Директор:</b> Полный доступ, выдача валюты, настройка шансов, HR-панель.\n"
+        "• <b>Зам:</b> Проверка купонов, создание промокодов, наказания.\n"
+        "• <b>Мл. Админ:</b> Просмотр статистики и наказаний.\n\n"
+        "📩 <b>Поддержка:</b> " + CONTACT_ADMIN
+    )
+    await cb.message.edit_text(text, reply_markup=back_btn())
     await cb.answer()
 
-@dp.callback_query(F.data == "ref")
-async def ref(cb: CallbackQuery):
-    bot_info = await bot.get_me()
-    link = f"https://t.me/{bot_info.username}?start={cb.from_user.id}"
-    await cb.message.edit_text(f"👥 <b>Пригласи друзей!</b>\n\n🔗 Ссылка:\n<code>{link}</code>", reply_markup=back_btn())
+# --- МОИ ПРАВА (ДЛЯ АДМИНОВ) ---
+@dp.callback_query(F.data == "my_rights")
+async def my_rights(cb: CallbackQuery):
+    rank = await get_admin_rank(cb.from_user.id)
+    if rank == 3:
+        text = "👑 <b>Ваш ранг: Директор</b>\n\nВам доступны все функции бота без ограничений."
+    elif rank == 2:
+        text = "⭐ <b>Ваш ранг: Заместитель</b>\n\nВы можете: проверять купоны, создавать промокоды, банить игроков.\nВы НЕ можете: выдавать валюту, менять шансы, назначать админов."
+    else:
+        text = "🛡 <b>Ваш ранг: Младший администратор</b>\n\nВы можете: смотреть статистику.\nВы НЕ можете: создавать промо, выдавать валюту, банить."
+    await cb.message.edit_text(text, reply_markup=back_btn("close_admin"))
     await cb.answer()
 
+# --- ПОКУПКА КОЭНОВ ---
+@dp.callback_query(F.data == "buy_coins")
+async def buy_coins(cb: CallbackQuery, state: FSMContext):
+    text = "💎 <b>Пополнение Коэнов</b>\n\nВведите сумму в рублях:\nКурс: <b>1 рубль = 1 Коэн</b>\n\nПосле ввода бот выдаст реквизиты."
+    await cb.message.edit_text(text, reply_markup=back_btn())
+    await state.set_state(UserState.waiting_coin_amount)
+    await cb.answer()
+
+@dp.message(UserState.waiting_coin_amount)
+async def process_coin_buy(message: Message, state: FSMContext):
+    if not message.text.isdigit(): return await message.answer("❌ Введите число!")
+    amount = int(message.text)
+    if amount < 10: return await message.answer("❌ Минимум 10 рублей.")
+    await state.clear()
+    text = f"💎 Вы хотите купить <b>{amount} Коэнов</b> за <b>{amount} руб.</b>\n\n1. Переведите на карту:\n<code>{CARD_NUMBER}</code> ({CARD_BANK})\n2. Отправьте чек админу: {CONTACT_ADMIN}\n\nПосле проверки вам начислят Коэны."
+    await message.answer(text, reply_markup=main_menu())
+
+# --- КЕЙСЫ ---
 @dp.callback_query(F.data == "cases")
 async def cases_menu(cb: CallbackQuery):
+    kb = []
+    for k, c in CASES.items():
+        kb.append([InlineKeyboardButton(text=f"{c['name']}", callback_data=f"view_{k}")])
+    kb.append([InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")])
+    await cb.message.edit_text("🎁 Выберите кейс, чтобы посмотреть шансы:", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+    await cb.answer()
+
+@dp.callback_query(F.data.startswith("view_"))
+async def view_case(cb: CallbackQuery):
+    key = cb.data.split("_")[1]
+    case = CASES[key]
+    text = f"<b>{case['name']}</b>\n\n🎁 <b>Содержимое и шансы:</b>\n"
+    for item in case["items"]:
+        text += f"▪️ {item[0]} — {item[4]} (Стоимость: {item[2]}⭐)\n"
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"{CASES['poor']['name']} ({CASES['poor']['price']}⭐)", callback_data="open_poor_stars")],
-        [InlineKeyboardButton(text=f"{CASES['poor']['name']} ({CASES['poor']['coin_price']}💎)", callback_data="open_poor_coins")],
-        [InlineKeyboardButton(text=f"{CASES['rich']['name']} ({CASES['rich']['price']}⭐)", callback_data="open_rich_stars")],
-        [InlineKeyboardButton(text=f"{CASES['rich']['name']} ({CASES['rich']['coin_price']}💎)", callback_data="open_rich_coins")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")]
+        [InlineKeyboardButton(text=f"Открыть за {case['price']}⭐", callback_data=f"open_{key}_stars")],
+        [InlineKeyboardButton(text=f"Открыть за {case['coin_price']}💎", callback_data=f"open_{key}_coins")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="cases")]
     ])
-    await cb.message.edit_text("🎁 Выберите кейс:", reply_markup=kb)
+    await cb.message.edit_text(text, reply_markup=kb)
     await cb.answer()
 
 @dp.callback_query(F.data.startswith("open_") & F.data.endswith("_stars"))
@@ -216,9 +290,16 @@ async def open_coins(cb: CallbackQuery):
         return await cb.answer("❌ Недостаточно Коэнов!", show_alert=True)
     
     await upd_bal(cb.from_user.id, -case["coin_price"], is_coin=True)
-    name, rarity, val, w = open_case(key)
+    msg = await cb.message.edit_text("🎰 Крутим рулетку...")
+    await asyncio.sleep(0.4)
+    await msg.edit_text("🎰 Крутим... 🍒")
+    await asyncio.sleep(0.4)
+    await msg.edit_text("🎰 Крутим... 💎")
+    await asyncio.sleep(0.4)
+    
+    name, rarity, val, w, fake = open_case(key)
     await add_item(cb.from_user.id, name, rarity, val)
-    await cb.message.edit_text(f"🎉 Вы выиграли: <b>{name}</b>", reply_markup=back_btn("cases"))
+    await msg.edit_text(f"🎉 Вы выиграли: <b>{name}</b> ({val}⭐)", reply_markup=back_btn("cases"))
     await cb.answer()
 
 @dp.pre_checkout_query()
@@ -227,7 +308,7 @@ async def pre_checkout(query: PreCheckoutQuery): await query.answer(ok=True)
 @dp.message(F.successful_payment)
 async def on_pay(message: Message):
     key = message.successful_payment.invoice_payload.split("_")[1]
-    name, rarity, val, w = open_case(key)
+    name, rarity, val, w, fake = open_case(key)
     await add_item(message.from_user.id, name, rarity, val)
     await message.answer(f"🎉 Вы выиграли: <b>{name}</b>", reply_markup=main_menu())
 
@@ -347,6 +428,48 @@ async def admin_maint(cb: CallbackQuery):
     await set_setting("maintenance", str(not cur))
     await cb.answer(f"Тех.работы: {'ВЫКЛ' if cur else 'ВКЛ'}", show_alert=True)
 
+@dp.callback_query(F.data == "admin_give_menu")
+async def admin_give_menu(cb: CallbackQuery):
+    if await get_admin_rank(cb.from_user.id) != 3: return await cb.answer("Нет прав!", show_alert=True)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💰 Монеты", callback_data="give_type_balance")],
+        [InlineKeyboardButton(text="💎 Коэны", callback_data="give_type_coins")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="close_admin")]
+    ])
+    await cb.message.edit_text("Что хотите выдать?", reply_markup=kb)
+    await cb.answer()
+
+@dp.callback_query(F.data.startswith("give_type_"))
+async def admin_give_type(cb: CallbackQuery, state: FSMContext):
+    if await get_admin_rank(cb.from_user.id) != 3: return
+    give_type = cb.data.split("_")[2]
+    await state.update_data(give_type=give_type)
+    await cb.message.edit_text("Введите ID игрока:", reply_markup=back_btn("close_admin"))
+    await state.set_state(AdminState.waiting_give_id)
+    await cb.answer()
+
+@dp.message(AdminState.waiting_give_id)
+async def admin_give_id(message: Message, state: FSMContext):
+    if not message.text.isdigit(): return await message.answer("Введите число!")
+    await state.update_data(target_id=int(message.text))
+    await message.answer("Введите сумму для выдачи:")
+    await state.set_state(AdminState.waiting_give_amount)
+
+@dp.message(AdminState.waiting_give_amount)
+async def admin_give_amt(message: Message, state: FSMContext):
+    if not message.text.isdigit(): return await message.answer("Введите число!")
+    amount = int(message.text)
+    data = await state.get_data()
+    target_id = data.get('target_id')
+    give_type = data.get('give_type', 'balance')
+    await state.clear()
+    is_coin = (give_type == "coins")
+    await upd_bal(target_id, amount, is_coin=is_coin)
+    currency_name = "Коэнов" if is_coin else "Монет"
+    await message.answer(f"✅ Выдано {amount} {currency_name} пользователю {target_id}.", reply_markup=main_menu())
+    try: await bot.send_message(target_id, f"🎁 Вам начислено {amount} {currency_name}!")
+    except: pass
+
 @dp.callback_query(F.data == "admin_coupon")
 async def admin_coupon(cb: CallbackQuery, state: FSMContext):
     if await get_admin_rank(cb.from_user.id) < 2: return await cb.answer("Нет прав!", show_alert=True)
@@ -361,11 +484,9 @@ async def admin_check_coupon(message: Message, state: FSMContext):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT c.user_id, c.item_name, u.full_name, c.status FROM coupons c JOIN users u ON c.user_id = u.user_id WHERE c.code = ?", (code,)) as cur:
             info = await cur.fetchone()
-            
     if not info: return await message.answer("❌ Купон не найден.", reply_markup=main_menu())
     uid, item, name, status = info
     if status == 'given': return await message.answer("⚠️ Купон УЖЕ ВЫДАН!", reply_markup=main_menu())
-    
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Я выдал подарок", callback_data=f"givecoupon_{code}")]])
     await message.answer(f"🔍 <b>Купон:</b>\n👤 {name} ({uid})\n🎁 {item}\n\nВыдать?", reply_markup=kb)
 
@@ -407,61 +528,6 @@ async def admin_promo_uses(message: Message, state: FSMContext):
     await message.answer(f"✅ Промокод: <code>{code}</code>\nСумма: {data['val']}\nАктиваций: {message.text}", reply_markup=main_menu())
     await state.clear()
 
-@dp.callback_query(F.data == "admin_give")
-async def admin_give_req(cb: CallbackQuery, state: FSMContext):
-    rank = await get_admin_rank(cb.from_user.id)
-    if rank == 0: return
-    await cb.message.edit_text("Введите ID игрока для выдачи:", reply_markup=back_btn("close_admin"))
-    await state.set_state(AdminState.waiting_give_id)
-    await cb.answer()
-
-@dp.message(AdminState.waiting_give_id)
-async def admin_give_id(message: Message, state: FSMContext):
-    if not message.text.isdigit(): return await message.answer("Введите число!")
-    await state.update_data(target_id=int(message.text))
-    await message.answer("Введите сумму для выдачи:")
-    await state.set_state(AdminState.waiting_give_amount)
-
-@dp.message(AdminState.waiting_give_amount)
-async def admin_give_amt(message: Message, state: FSMContext):
-    if not message.text.isdigit(): return await message.answer("Введите число!")
-    amount = int(message.text)
-    data = await state.get_data()
-    target_id = data['target_id']
-    admin_id = message.from_user.id
-    rank = await get_admin_rank(admin_id)
-    await state.clear()
-    
-    if rank == 3:
-        await upd_bal(target_id, amount)
-        await add_hr_log(admin_id, "Выдача валюты", f"Выдал {amount} монет юзеру {target_id}")
-        await message.answer(f"✅ Выдано {amount} монет пользователю {target_id}.", reply_markup=main_menu())
-    else:
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Одобрить", callback_data=f"approve_give_{target_id}_{amount}_{admin_id}")],
-            [InlineKeyboardButton(text="❌ Отклонить", callback_data="deny_req")]
-        ])
-        try:
-            await bot.send_message(ADMIN_IDS[0], f"⚠️ <b>Запрос на выдачу!</b>\nАдмин: @{message.from_user.username} (Ранг: {rank})\nКому: {target_id}\nСумма: {amount} монет", reply_markup=kb)
-            await message.answer("📨 Запрос отправлен Директору.", reply_markup=main_menu())
-        except:
-            await message.answer("❌ Ошибка. Директор не в сети.")
-
-@dp.callback_query(F.data.startswith("approve_give_"))
-async def approve_give(cb: CallbackQuery):
-    if cb.from_user.id != ADMIN_IDS[0]: return await cb.answer("Вы не Директор!", show_alert=True)
-    _, _, target_id, amount, admin_id = cb.data.split("_")
-    await upd_bal(int(target_id), int(amount))
-    await add_hr_log(int(admin_id), "Аппрув выдачи", f"Директор одобрил выдачу {amount} монет юзеру {target_id}")
-    await cb.message.edit_text(f"✅ Вы одобрили выдачу {amount} монет для {target_id}.")
-    await cb.answer("Выдано!")
-
-@dp.callback_query(F.data == "deny_req")
-async def deny_give(cb: CallbackQuery):
-    if cb.from_user.id != ADMIN_IDS[0]: return
-    await cb.message.edit_text("❌ Запрос отклонен.")
-    await cb.answer("Отклонено.")
-
 @dp.callback_query(F.data == "admin_odds")
 async def admin_odds(cb: CallbackQuery, state: FSMContext):
     if await get_admin_rank(cb.from_user.id) != 3: return
@@ -502,7 +568,7 @@ async def hr_logs(cb: CallbackQuery):
 @dp.callback_query(F.data == "hr_set_staff")
 async def hr_set_staff_prompt(cb: CallbackQuery, state: FSMContext):
     if await get_admin_rank(cb.from_user.id) != 3: return
-    await cb.message.edit_text("Введите ID пользователя, чтобы назначить его Замом (ранг 2):", reply_markup=back_btn("admin_staff"))
+    await cb.message.edit_text("Введите ID пользователя, чтобы назначить его Замом:", reply_markup=back_btn("admin_staff"))
     await state.set_state(AdminState.waiting_staff_id)
     await cb.answer()
 
