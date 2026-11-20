@@ -55,11 +55,11 @@ async def global_error_handler(event: types.ErrorEvent):
         if update.callback_query:
             user_id = update.callback_query.from_user.id
             data = update.callback_query.data
-            update_type = "Callback (Нажатие кнопки)"
+            update_type = "Callback"
         elif update.message:
             user_id = update.message.from_user.id
             data = update.message.text or ""
-            update_type = "Message (Текст)"
+            update_type = "Message"
             
         await send_error_to_admin(update_type, exc, user_id, data)
     except Exception as e:
@@ -109,10 +109,7 @@ async def init_db():
         ]
         for k, v in defaults: await db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
 
-        star_prices = {
-            "50": 1.19, "100": 2.39, "150": 3.69, "250": 6.09, "500": 11.99, "1000": 23.99, "10000": 239.00,
-            "prem3": 17.99, "prem6": 22.99, "prem12": 39.99
-        }
+        star_prices = {"50": 1.19, "100": 2.39, "150": 3.69, "250": 6.09, "500": 11.99, "1000": 23.99, "10000": 239.00, "prem3": 17.99, "prem6": 22.99, "prem12": 39.99}
         for k, v in star_prices.items():
             await db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (f"price_{k}_usd", str(v)))
 
@@ -212,6 +209,7 @@ async def safe_get_user(user_id, username="", full_name=""):
 
 async def upd_bal(user_id, amount, is_coin=False, add_jackpot=True):
     try:
+        if amount <= 0 and not is_coin: pass 
         async with aiosqlite.connect(DB_PATH) as db:
             if is_coin: await db.execute("UPDATE users SET coins = coins + ? WHERE user_id = ?", (amount, user_id))
             else:
@@ -298,7 +296,7 @@ async def update_pity(user_id, case_key, increment=True):
 async def open_case(case_key, user_id):
     try:
         items = await get_case_items(case_key)
-        if not items: return (0, "Пусто", "common", 0, 0, "0%") # Добавлен ID 0 для исправления распаковки
+        if not items: return (0, "Пусто", "common", 0, 0, "0%")
         threshold = int(await get_setting("pity_threshold") or 30)
         fails = await get_pity(user_id, case_key)
         if fails >= threshold:
@@ -445,8 +443,9 @@ async def cmd_start(message: Message):
         await message.answer("⚠️ Ошибка, попробуйте /menu")
 
 @dp.callback_query(F.data == "back_main")
-async def back_main(cb: CallbackQuery):
+async def back_main(cb: CallbackQuery, state: FSMContext):
     try:
+        await state.clear() # Защита от зависания
         user = await safe_get_user(cb.from_user.id, cb.from_user.username, cb.from_user.full_name)
         text = (
             f"🏠 <b>ГЛАВНОЕ МЕНЮ</b>\n━━━━━━━━━━━━━━━━━━\n"
@@ -566,7 +565,7 @@ async def daily_bonus(cb: CallbackQuery):
             await db.execute("UPDATE users SET balance = balance + ?, last_bonus = ?, bonus_streak = ? WHERE user_id = ?", (reward, today_str, streak, cb.from_user.id))
             await db.commit()
         await cb.answer(f"✅ БОНУС: {reward} 💰\n🔥 Серия: {streak}/7 дней!", show_alert=True)
-        await back_main(cb)
+        await back_main(cb, state=None)
     except: await cb.answer("Ошибка", show_alert=True)
 
 @dp.callback_query(F.data == "wheel")
@@ -660,6 +659,7 @@ async def crash_bet(message: Message, state: FSMContext):
     try:
         if not message.text.isdigit(): return await message.answer("❌ ВВЕДИ ЧИСЛО!")
         bet = int(message.text)
+        if bet <= 0: return await message.answer("❌ Ставка должна быть больше 0!")
         user = await safe_get_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
         if user['balance'] < bet: return await message.answer("❌ НЕДОСТАТОЧНО МОНЕТ!")
         await state.update_data(bet=bet)
@@ -747,7 +747,7 @@ async def open_stars(cb: CallbackQuery):
         cases = await get_cases()
         if key not in cases: return await cb.answer("Ошибка", show_alert=True)
         case = cases[key]
-        prices = [LabeledPrice(label=case["name"], amount=case["price"])]
+        prices = [LabeledPrice(label=case["name"], amount=int(case["price"]))]
         await bot.send_invoice(chat_id=cb.from_user.id, title=case["name"], description="Открыть кейс?", payload=f"case_{key}", provider_token="", currency="XTR", prices=prices)
         await cb.answer()
     except: await cb.answer("Ошибка", show_alert=True)
@@ -764,7 +764,6 @@ async def open_coins(cb: CallbackQuery):
         if user['coins'] < case["coin_price"]: return await cb.answer("❌ НЕДОСТАТОЧНО КОЭНОВ!", show_alert=True)
         await upd_bal(cb.from_user.id, -case["coin_price"], is_coin=True)
         msg = await play_animation(cb.message, case['name'])
-        # ИСПРАВЛЕНО: правильная распаковка 6 элементов
         item_id, name, rarity, val, w, fake = await open_case(key, cb.from_user.id)
         await add_item(cb.from_user.id, name, rarity, val)
         await add_xp(cb.from_user.id, 10)
@@ -788,7 +787,6 @@ async def open_mon(cb: CallbackQuery):
         if user['balance'] < case["mon_price"]: return await cb.answer("❌ НЕДОСТАТОЧНО МОНЕТ!", show_alert=True)
         await upd_bal(cb.from_user.id, -case["mon_price"], is_coin=False)
         msg = await play_animation(cb.message, case['name'])
-        # ИСПРАВЛЕНО: правильная распаковка 6 элементов
         item_id, name, rarity, val, w, fake = await open_case(key, cb.from_user.id)
         await add_item(cb.from_user.id, name, rarity, val)
         await add_xp(cb.from_user.id, 10)
@@ -833,7 +831,9 @@ async def sell(cb: CallbackQuery):
         item_id = int(cb.data.split("_")[1])
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute("SELECT value FROM inventory WHERE id = ?", (item_id,)) as cur:
-                val = (await cur.fetchone())[0]
+                row = await cur.fetchone()
+                if not row: return await cb.answer("❌ Предмет не найден!", show_alert=True)
+                val = row[0]
             await db.execute("DELETE FROM inventory WHERE id = ?", (item_id,))
             await db.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (val, cb.from_user.id))
             await db.commit()
@@ -849,7 +849,9 @@ async def withdraw(cb: CallbackQuery):
         if user['referrals'] < 3: return await cb.answer(f"❌ НУЖНО 3 РЕФЕРАЛА! У тебя: {user['referrals']}/3", show_alert=True)
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute("SELECT item_name FROM inventory WHERE id = ?", (item_id,)) as cur:
-                item_name = (await cur.fetchone())[0]
+                row = await cur.fetchone()
+                if not row: return await cb.answer("❌ Предмет не найден!", show_alert=True)
+                item_name = row[0]
             code = gen_code(8)
             await db.execute("INSERT INTO coupons (code, user_id, item_name) VALUES (?, ?, ?)", (code, cb.from_user.id, item_name))
             await db.execute("UPDATE inventory SET is_withdrawn = 1 WHERE id = ?", (item_id,))
@@ -888,6 +890,7 @@ async def play_game(message: Message, state: FSMContext):
     try:
         if not message.text.isdigit(): return await message.answer("❌ ВВЕДИ ЧИСЛО!")
         bet = int(message.text)
+        if bet <= 0: return await message.answer("❌ Ставка должна быть больше 0!")
         user = await safe_get_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
         if user['balance'] < bet: return await message.answer("❌ НЕДОСТАТОЧНО МОНЕТ!")
         data = await state.get_data()
@@ -1899,6 +1902,7 @@ async def admin_edit_bal_amount(message: Message, state: FSMContext):
     try:
         if not message.text.isdigit(): return await message.answer("Число!")
         amount = int(message.text)
+        if amount <= 0: return await message.answer("Сумма должна быть больше 0!")
         data = await state.get_data()
         await state.clear()
         is_coin = (data.get('edit_type') == "coins")
@@ -1967,6 +1971,7 @@ async def web_server():
 async def main():
     await init_db()
     await bot.delete_webhook(drop_pending_updates=True)
+    await asyncio.sleep(1)
     asyncio.create_task(web_server())
     asyncio.create_task(keep_alive())
     print("Бот запущен! Все системы в норме.")
