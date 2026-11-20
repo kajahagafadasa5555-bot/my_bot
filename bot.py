@@ -7,7 +7,7 @@ import os
 import aiosqlite
 import traceback
 from aiohttp import web
-from aiogram import Bot, Dispatcher, F
+from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, PreCheckoutQuery, LabeledPrice, FSInputFile
 from aiogram.client.default import DefaultBotProperties
@@ -62,7 +62,8 @@ async def global_error_handler(event: types.ErrorEvent):
             update_type = "Message (Текст)"
             
         await send_error_to_admin(update_type, exc, user_id, data)
-    except: pass
+    except Exception as e:
+        logging.error(f"Error in error handler: {e}")
 
 # ================= БАЗА ДАННЫХ =================
 async def init_db():
@@ -297,7 +298,7 @@ async def update_pity(user_id, case_key, increment=True):
 async def open_case(case_key, user_id):
     try:
         items = await get_case_items(case_key)
-        if not items: return ("Пусто", "common", 0, 0, "0%")
+        if not items: return (0, "Пусто", "common", 0, 0, "0%") # Добавлен ID 0 для исправления распаковки
         threshold = int(await get_setting("pity_threshold") or 30)
         fails = await get_pity(user_id, case_key)
         if fails >= threshold:
@@ -311,7 +312,9 @@ async def open_case(case_key, user_id):
         if chosen[2] in ("legendary", "mythic"): await update_pity(user_id, case_key, increment=False)
         else: await update_pity(user_id, case_key, increment=True)
         return chosen
-    except: return ("Ошибка", "common", 0, 0, "0%")
+    except Exception as e:
+        logging.error(f"open_case error: {e}")
+        return (0, "Ошибка", "common", 0, 0, "0%")
 
 # ================= АНИМАЦИЯ =================
 async def play_animation(message: Message, case_name: str):
@@ -761,7 +764,8 @@ async def open_coins(cb: CallbackQuery):
         if user['coins'] < case["coin_price"]: return await cb.answer("❌ НЕДОСТАТОЧНО КОЭНОВ!", show_alert=True)
         await upd_bal(cb.from_user.id, -case["coin_price"], is_coin=True)
         msg = await play_animation(cb.message, case['name'])
-        name, rarity, val, w, fake = await open_case(key, cb.from_user.id)
+        # ИСПРАВЛЕНО: правильная распаковка 6 элементов
+        item_id, name, rarity, val, w, fake = await open_case(key, cb.from_user.id)
         await add_item(cb.from_user.id, name, rarity, val)
         await add_xp(cb.from_user.id, 10)
         await update_quest_progress(cb.from_user.id, "case")
@@ -784,7 +788,8 @@ async def open_mon(cb: CallbackQuery):
         if user['balance'] < case["mon_price"]: return await cb.answer("❌ НЕДОСТАТОЧНО МОНЕТ!", show_alert=True)
         await upd_bal(cb.from_user.id, -case["mon_price"], is_coin=False)
         msg = await play_animation(cb.message, case['name'])
-        name, rarity, val, w, fake = await open_case(key, cb.from_user.id)
+        # ИСПРАВЛЕНО: правильная распаковка 6 элементов
+        item_id, name, rarity, val, w, fake = await open_case(key, cb.from_user.id)
         await add_item(cb.from_user.id, name, rarity, val)
         await add_xp(cb.from_user.id, 10)
         await update_quest_progress(cb.from_user.id, "case")
@@ -799,7 +804,7 @@ async def pre_checkout(query: PreCheckoutQuery): await query.answer(ok=True)
 async def on_pay(message: Message):
     try:
         key = message.successful_payment.invoice_payload.split("_")[1]
-        name, rarity, val, w, fake = await open_case(key, message.from_user.id)
+        item_id, name, rarity, val, w, fake = await open_case(key, message.from_user.id)
         await add_item(message.from_user.id, name, rarity, val)
         await add_xp(message.from_user.id, 10)
         await message.answer(f"🎉 Вы выиграли: <b>{name}</b>", reply_markup=await main_menu(message.from_user.id))
@@ -934,7 +939,7 @@ async def promo_check(message: Message, state: FSMContext):
         await message.answer(f"✅ <b>АКТИВИРОВАН!</b>\nПолучено <b>{promo[0]}</b> монет.", reply_markup=await main_menu(message.from_user.id))
     except: await message.answer("Ошибка при вводе промокода.")
 
-# ================= ПОКУПКА ЗВЕЗД (Магазин Stars) =================
+# ================= ПОКУПКА ЗВЕЗД =================
 @dp.callback_query(F.data == "buy_stars")
 async def buy_stars_menu(cb: CallbackQuery):
     try:
