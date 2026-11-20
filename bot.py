@@ -5,6 +5,7 @@ import random
 import string
 import os
 import aiosqlite
+import traceback
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
@@ -21,16 +22,51 @@ CONTACT_ADMIN = "@drag_monster_zl"
 CARD_NUMBER = "9112 3801 7930 6727"
 CARD_BANK = "Беларусь Банк"
 DB_PATH = "bot.db"
-USD_TO_BYN = 2.9943 
+USD_TO_BYN = 2.9943
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
+# ================= ГЛОБАЛЬНЫЙ ПЕРЕХВАТ ОШИБОК =================
+async def send_error_to_admin(update_type: str, error: Exception, user_id: int, data: str = ""):
+    tb = traceback.format_exc()
+    text = (
+        f"🚨 <b>ОШИБКА В БОТЕ</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"👤 <b>Юзер:</b> <code>{user_id}</code>\n"
+        f"📌 <b>Где:</b> {update_type} | {data}\n"
+        f"❌ <b>Ошибка:</b> <code>{str(error)}</code>\n\n"
+        f"📝 <b>Трейс:</b>\n<pre>{tb[-1000:]}</pre>"
+    )
+    for admin in ADMIN_IDS:
+        try: await bot.send_message(admin, text)
+        except: pass
+
+@dp.errors()
+async def global_error_handler(event: types.ErrorEvent):
+    try:
+        update = event.update
+        exc = event.exception
+        user_id = 0
+        data = ""
+        update_type = "Unknown"
+        
+        if update.callback_query:
+            user_id = update.callback_query.from_user.id
+            data = update.callback_query.data
+            update_type = "Callback (Нажатие кнопки)"
+        elif update.message:
+            user_id = update.message.from_user.id
+            data = update.message.text or ""
+            update_type = "Message (Текст)"
+            
+        await send_error_to_admin(update_type, exc, user_id, data)
+    except: pass
+
 # ================= БАЗА ДАННЫХ =================
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
-        # Таблицы
         await db.execute("""CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY, username TEXT, full_name TEXT,
             balance INTEGER DEFAULT 1000, coins INTEGER DEFAULT 0,
@@ -54,28 +90,24 @@ async def init_db():
         await db.execute("CREATE TABLE IF NOT EXISTS promo_activations (user_id INTEGER, code TEXT, PRIMARY KEY (user_id, code))")
         await db.execute("CREATE TABLE IF NOT EXISTS pity (user_id INTEGER, case_key TEXT, fail_count INTEGER DEFAULT 0, PRIMARY KEY (user_id, case_key))")
         await db.execute("CREATE TABLE IF NOT EXISTS button_names (key TEXT PRIMARY KEY, text TEXT)")
-        
-        # Таблица для заказов Stars/Premium
         await db.execute("""CREATE TABLE IF NOT EXISTS star_orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, item_key TEXT, 
             item_name TEXT, price_byn REAL, status TEXT DEFAULT 'pending', 
             created_at TEXT)""")
 
-        # Миграция users
         async with db.execute("PRAGMA table_info(users)") as cur:
             columns = [row[1] for row in await cur.fetchall()]
         needed_columns = {"xp": "INTEGER DEFAULT 0", "level": "INTEGER DEFAULT 1", "jackpot_contribution": "INTEGER DEFAULT 0", "wins_count": "INTEGER DEFAULT 0", "bonus_streak": "INTEGER DEFAULT 0"}
         for col, col_type in needed_columns.items():
             if col not in columns: await db.execute(f"ALTER TABLE users ADD COLUMN {col} {col_type}")
 
-        # Настройки по умолчанию
         defaults = [
             ('maintenance', 'False'), ('panic', 'False'), ('bj_chance', '20'), ('shop_price', '100000'),
-            ('jackpot_enabled', 'True'), ('crash_chance', '40'), ('pity_threshold', '30')
+            ('jackpot_enabled', 'True'), ('crash_chance', '40'), ('pity_threshold', '30'),
+            ('real_chance_up', '50'), ('real_chance_coin', '50'), ('real_chance_bj', '20'), ('real_chance_crash', '40')
         ]
         for k, v in defaults: await db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
 
-        # Цены в долларах
         star_prices = {
             "50": 1.19, "100": 2.39, "150": 3.69, "250": 6.09, "500": 11.99, "1000": 23.99, "10000": 239.00,
             "prem3": 17.99, "prem6": 22.99, "prem12": 39.99
@@ -83,7 +115,6 @@ async def init_db():
         for k, v in star_prices.items():
             await db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (f"price_{k}_usd", str(v)))
 
-        # Названия кнопок
         btn_defaults = {
             "btn_cases": "🎁 КЕЙСЫ", "btn_games": "🎮 ИГРЫ", "btn_quests": "🎯 КВЕСТЫ", "btn_achievements": "🏆 ДОСТИЖЕНИЯ",
             "btn_bonus": "🎁 БОНУС", "btn_wheel": "🎰 КОЛЕСО", "btn_shop": "🛒 МАГАЗИН", "btn_buy_stars": "⭐ STARS/ПРЕМКА",
@@ -97,7 +128,6 @@ async def init_db():
         await db.execute("INSERT OR IGNORE INTO admins (user_id, rank) VALUES (?, 3)", (ADMIN_IDS[0],))
         await db.execute("INSERT OR IGNORE INTO jackpot (id, amount) VALUES (1, 0)")
 
-        # Кейсы
         async with db.execute("SELECT COUNT(*) FROM cases") as cur:
             if (await cur.fetchone())[0] == 0:
                 cases_data = [("poor", "🥺 Нищий", 15, 5, 15000), ("rich", "👑 Богатый", 100, 30, 100000), ("nft", "💎 NFT Кейс", 700, 250, 1000000)]
@@ -329,7 +359,9 @@ async def admin_menu(rank, user_id):
             kb.append([InlineKeyboardButton(text="👥 HR-ПАНЕЛЬ", callback_data="admin_staff")])
             kb.append([InlineKeyboardButton(text="⚙️ ШАНСЫ БД", callback_data="admin_odds"), InlineKeyboardButton(text="🛒 МАГАЗИН", callback_data="admin_shop")])
             kb.append([InlineKeyboardButton(text="🎁 КЕЙСЫ", callback_data="admin_cases")])
+            kb.append([InlineKeyboardButton(text="🎲 РЕАЛЬНЫЙ ШАНС", callback_data="admin_real_chance"), InlineKeyboardButton(text="🎭 ЛИПОВЫЙ ШАНС", callback_data="admin_fake_chance")])
             kb.append([InlineKeyboardButton(text="🏷️ НАЗВАНИЯ КНОПОК", callback_data="admin_button_names")])
+            kb.append([InlineKeyboardButton(text="⭐ НАСТРОЙКА ЦЕН STARS", callback_data="admin_stars_prices")])
             kb.append([InlineKeyboardButton(text="✅ ПОДТВЕРДИТЬ STARS", callback_data="admin_confirm_stars")])
             kb.append([InlineKeyboardButton(text="📢 РАССЫЛКА", callback_data="admin_broadcast")])
             kb.append([InlineKeyboardButton(text="💾 БД", callback_data="admin_backup"), InlineKeyboardButton(text="📈 ЛОГИ", callback_data="hr_logs")])
@@ -376,7 +408,10 @@ class AdminState(StatesGroup):
     waiting_edit_item_chance = State()
     waiting_button_key = State()
     waiting_button_text = State()
-    waiting_confirm_order_id = State()
+    waiting_stars_price = State()
+    waiting_stars_price_key = State()
+    waiting_real_chance_val = State()
+    waiting_fake_chance_val = State()
 
 # ================= ПОЛЬЗОВАТЕЛЬСКИЕ ХЭНДЛЕРЫ =================
 @dp.message(CommandStart())
@@ -627,7 +662,7 @@ async def crash_bet(message: Message, state: FSMContext):
         await state.update_data(bet=bet)
         await upd_bal(message.from_user.id, -bet)
         await state.clear()
-        crash_chance = int(await get_setting("crash_chance") or 40) / 100.0
+        crash_chance = int(await get_setting("real_chance_crash") or 40) / 100.0
         crash_point = random.uniform(1.1, 10.0) if random.random() > crash_chance else random.uniform(1.01, 1.5)
         msg = await message.answer("📈 <b>CRASH...</b>\nМножитель: x1.00\n\nНажмите ЗАБРАТЬ!")
         kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💰 ЗАБРАТЬ", callback_data="crash_take")]])
@@ -856,10 +891,12 @@ async def play_game(message: Message, state: FSMContext):
         await upd_bal(message.from_user.id, -bet)
         await update_quest_progress(message.from_user.id, "bet")
         await add_xp(message.from_user.id, 5)
-        if game == "game_up": win = random.random() < 0.5
-        elif game == "game_coin": win = random.choice([True, False])
-        elif game == "game_bj": win = random.random() < (int(await get_setting("bj_chance") or 20) / 100.0)
+        
+        if game == "game_up": win = random.random() < (int(await get_setting("real_chance_up") or 50) / 100.0)
+        elif game == "game_coin": win = random.random() < (int(await get_setting("real_chance_coin") or 50) / 100.0)
+        elif game == "game_bj": win = random.random() < (int(await get_setting("real_chance_bj") or 20) / 100.0)
         else: win = False
+        
         if win:
             await upd_bal(message.from_user.id, bet * 2)
             async with aiosqlite.connect(DB_PATH) as db:
@@ -941,6 +978,15 @@ async def admin_cmd(message: Message):
         await message.answer("👑 <b>АДМИН-ПАНЕЛЬ</b>", reply_markup=await admin_menu(rank, message.from_user.id))
     except: await message.answer("Ошибка")
 
+@dp.callback_query(F.data == "admin_panel")
+async def admin_panel_cb(cb: CallbackQuery):
+    try:
+        rank = await get_admin_rank(cb.from_user.id)
+        if rank == 0: return await cb.answer("Нет прав!", show_alert=True)
+        await cb.message.edit_text("👑 <b>АДМИН-ПАНЕЛЬ</b>", reply_markup=await admin_menu(rank, cb.from_user.id))
+        await cb.answer()
+    except: await cb.answer("Ошибка", show_alert=True)
+
 @dp.callback_query(F.data == "close_admin")
 async def close_admin(cb: CallbackQuery):
     try:
@@ -983,10 +1029,16 @@ async def admin_help(cb: CallbackQuery):
             "▪️ Создание новых кейсов.\n"
             "▪️ Добавление/редактирование/удаление предметов.\n"
             "▪️ Настройка их цены, веса и шанса выпадения.\n\n"
+            "🎲 <b>РЕАЛЬНЫЙ ШАНС:</b>\n"
+            "Настройка реального шанса выигрыша в играх (Апгрейд, Монетка, БД, Crash) и в кейсах.\n\n"
+            "🎭 <b>ЛИПОВЫЙ ШАНС:</b>\n"
+            "Настройка текста шанса, который видят игроки. Можно написать '50%', а реальный оставить 1%.\n\n"
             "🏷️ <b>НАЗВАНИЯ КНОПОК:</b>\n"
             "Изменение текста на кнопках главного меню. Можно вставлять любые эмодзи и прем-стикеры.\n\n"
+            "⭐ <b>НАСТРОЙКА ЦЕН STARS:</b>\n"
+            "Изменение цен на товары в магазине Stars/Премиум.\n\n"
             "✅ <b>ПОДТВЕРДИТЬ STARS:</b>\n"
-            "Просмотр и подтверждение заказов на покупку Telegram Stars/Premium. После подтверждения товар выдается вручную.\n\n"
+            "Просмотр и подтверждение заказов на покупку Telegram Stars/Premium.\n\n"
             "📢 <b>РАССЫЛКА:</b>\n"
             "Отправка сообщения всем пользователям бота.\n\n"
             "💾 <b>БД:</b>\n"
@@ -997,6 +1049,85 @@ async def admin_help(cb: CallbackQuery):
         await cb.message.edit_text(text, reply_markup=back_btn("close_admin"))
         await cb.answer()
     except: await cb.answer("Ошибка", show_alert=True)
+
+# ================= АДМИН: РЕАЛЬНЫЙ ШАНС =================
+@dp.callback_query(F.data == "admin_real_chance")
+async def admin_real_chance(cb: CallbackQuery):
+    try:
+        if await get_admin_rank(cb.from_user.id) != 3: return
+        kb = [
+            [InlineKeyboardButton(text="🎮 Апгрейд X2", callback_data="set_real_up"), InlineKeyboardButton(text="🪙 Монетка", callback_data="set_real_coin")],
+            [InlineKeyboardButton(text="🃏 Блэкджек", callback_data="set_real_bj"), InlineKeyboardButton(text="📈 Crash", callback_data="set_real_crash")],
+            [InlineKeyboardButton(text="◀️ НАЗАД", callback_data="close_admin")]
+        ]
+        await cb.message.edit_text("🎲 <b>НАСТРОЙКА РЕАЛЬНОГО ШАНСА</b>\n\nВыберите игру:", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+        await cb.answer()
+    except: await cb.answer("Ошибка", show_alert=True)
+
+@dp.callback_query(F.data.startswith("set_real_"))
+async def set_real_chance_prompt(cb: CallbackQuery, state: FSMContext):
+    try:
+        game = cb.data.split("_")[2]
+        if game == "up": key = "real_chance_up"
+        elif game == "coin": key = "real_chance_coin"
+        elif game == "bj": key = "real_chance_bj"
+        elif game == "crash": key = "real_chance_crash"
+        else: return
+        await state.update_data(chance_key=key)
+        current = await get_setting(key) or "50"
+        await cb.message.edit_text(f"Текущий реальный шанс: <b>{current}%</b>\n\nВведите новый шанс (в %):", reply_markup=back_btn("admin_real_chance"))
+        await state.set_state(AdminState.waiting_real_chance_val)
+        await cb.answer()
+    except: await cb.answer("Ошибка", show_alert=True)
+
+@dp.message(AdminState.waiting_real_chance_val)
+async def set_real_chance_val(message: Message, state: FSMContext):
+    try:
+        if not message.text.isdigit(): return await message.answer("Число!")
+        data = await state.get_data()
+        await set_setting(data['chance_key'], message.text)
+        await message.answer(f"✅ Шанс обновлен: {message.text}%", reply_markup=await admin_menu(3, message.from_user.id))
+        await state.clear()
+    except: await message.answer("Ошибка")
+
+# ================= АДМИН: ЛИПОВЫЙ ШАНС =================
+@dp.callback_query(F.data == "admin_fake_chance")
+async def admin_fake_chance(cb: CallbackQuery):
+    try:
+        if await get_admin_rank(cb.from_user.id) != 3: return
+        kb = [
+            [InlineKeyboardButton(text="🎮 Апгрейд X2", callback_data="set_fake_up"), InlineKeyboardButton(text="🪙 Монетка", callback_data="set_fake_coin")],
+            [InlineKeyboardButton(text="🃏 Блэкджек", callback_data="set_fake_bj"), InlineKeyboardButton(text="📈 Crash", callback_data="set_fake_crash")],
+            [InlineKeyboardButton(text="◀️ НАЗАД", callback_data="close_admin")]
+        ]
+        await cb.message.edit_text("🎭 <b>НАСТРОЙКА ЛИПОВОГО ШАНСА (ТЕКСТ)</b>\n\nВыберите игру, чтобы изменить текст на кнопке:", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+        await cb.answer()
+    except: await cb.answer("Ошибка", show_alert=True)
+
+@dp.callback_query(F.data.startswith("set_fake_"))
+async def set_fake_chance_prompt(cb: CallbackQuery, state: FSMContext):
+    try:
+        game = cb.data.split("_")[2]
+        if game == "up": key = "fake_text_up"
+        elif game == "coin": key = "fake_text_coin"
+        elif game == "bj": key = "fake_text_bj"
+        elif game == "crash": key = "fake_text_crash"
+        else: return
+        await state.update_data(fake_key=key)
+        current = await get_setting(key) or "50%"
+        await cb.message.edit_text(f"Текущий текст: <b>{current}</b>\n\nВведите новый текст (например, '50%'):", reply_markup=back_btn("admin_fake_chance"))
+        await state.set_state(AdminState.waiting_fake_chance_val)
+        await cb.answer()
+    except: await cb.answer("Ошибка", show_alert=True)
+
+@dp.message(AdminState.waiting_fake_chance_val)
+async def set_fake_chance_val(message: Message, state: FSMContext):
+    try:
+        data = await state.get_data()
+        await set_setting(data['fake_key'], message.text)
+        await message.answer(f"✅ Текст обновлен: {message.text}", reply_markup=await admin_menu(3, message.from_user.id))
+        await state.clear()
+    except: await message.answer("Ошибка")
 
 # ================= АДМИН: ПОДТВЕРЖДЕНИЕ STARS =================
 @dp.callback_query(F.data == "admin_confirm_stars")
@@ -1040,6 +1171,47 @@ async def admin_confirm_order(cb: CallbackQuery):
         except: pass
         await cb.answer()
     except: await cb.answer("Ошибка", show_alert=True)
+
+# ================= АДМИН: НАСТРОЙКА ЦЕН STARS =================
+@dp.callback_query(F.data == "admin_stars_prices")
+async def admin_stars_prices(cb: CallbackQuery):
+    try:
+        if await get_admin_rank(cb.from_user.id) != 3: return
+        kb = [
+            [InlineKeyboardButton(text="50 Stars", callback_data="sp_50"), InlineKeyboardButton(text="100 Stars", callback_data="sp_100")],
+            [InlineKeyboardButton(text="150 Stars", callback_data="sp_150"), InlineKeyboardButton(text="250 Stars", callback_data="sp_250")],
+            [InlineKeyboardButton(text="500 Stars", callback_data="sp_500"), InlineKeyboardButton(text="1000 Stars", callback_data="sp_1000")],
+            [InlineKeyboardButton(text="10000 Stars", callback_data="sp_10000")],
+            [InlineKeyboardButton(text="Premium 3 мес", callback_data="sp_prem3"), InlineKeyboardButton(text="Premium 6 мес", callback_data="sp_prem6")],
+            [InlineKeyboardButton(text="Premium 12 мес", callback_data="sp_prem12")],
+            [InlineKeyboardButton(text="◀️ НАЗАД", callback_data="close_admin")]
+        ]
+        await cb.message.edit_text("⭐ <b>НАСТРОЙКА ЦЕН STARS/PREMIUM</b>\n\nВыберите товар для изменения цены (в долларах):", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+        await cb.answer()
+    except: await cb.answer("Ошибка", show_alert=True)
+
+@dp.callback_query(F.data.startswith("sp_"))
+async def stars_price_set(cb: CallbackQuery, state: FSMContext):
+    try:
+        if await get_admin_rank(cb.from_user.id) != 3: return
+        key = cb.data[3:]
+        await state.update_data(price_key=key)
+        current = await get_setting(f"price_{key}_usd") or "0"
+        await cb.message.edit_text(f"Текущая цена: <b>{current}$</b>\n\nВведите новую цену в долларах (например 2.39):", reply_markup=back_btn("admin_stars_prices"))
+        await state.set_state(AdminState.waiting_stars_price)
+        await cb.answer()
+    except: await cb.answer("Ошибка", show_alert=True)
+
+@dp.message(AdminState.waiting_stars_price)
+async def stars_price_save(message: Message, state: FSMContext):
+    try:
+        try: float(message.text)
+        except: return await message.answer("Введите число (например 2.39)!")
+        data = await state.get_data()
+        await set_setting(f"price_{data['price_key']}_usd", message.text)
+        await message.answer(f"✅ Цена обновлена: {message.text}$", reply_markup=await admin_menu(3, message.from_user.id))
+        await state.clear()
+    except: await message.answer("Ошибка")
 
 # ================= АДМИН: ОСТАЛЬНОЕ =================
 @dp.callback_query(F.data == "admin_stats")
@@ -1157,8 +1329,13 @@ async def edit_case_menu(cb: CallbackQuery):
         text = f"🎁 <b>{c['name']}</b> (key: {key})\n💰 Монеты: {c['mon_price']}\n💎 Коэны: {c['coin_price']}\n⭐ Stars: {c['price']}\n\n<b>Предметы:</b>\n"
         kb = []
         for item in items:
-            text += f"▪️ [id:{item[0]}] {item[1]} ({item[2]}) — {item[5]}\n"
-            kb.append([InlineKeyboardButton(text=f"✏️ {item[1]}", callback_data=f"edititem_{item[0]}"), InlineKeyboardButton(text=f"🗑", callback_data=f"delitem_{item[0]}")])
+            text += f"▪️ [id:{item[0]}] {item[1]} ({item[2]}) — {item[5]} (вес: {item[4]})\n"
+            kb.append([
+                InlineKeyboardButton(text=f"✏️ Имя", callback_data=f"edititem_{item[0]}"),
+                InlineKeyboardButton(text=f"🎲 Шанс", callback_data=f"edititemchance_{item[0]}"),
+                InlineKeyboardButton(text=f"🎭 Липа", callback_data=f"edititemfake_{item[0]}"),
+                InlineKeyboardButton(text=f"🗑", callback_data=f"delitem_{item[0]}")
+            ])
         text += f"\nВсего: {len(items)}"
         kb.append([InlineKeyboardButton(text="➕ ДОБАВИТЬ ПРЕДМЕТ", callback_data=f"additem_{key}")])
         kb.append([InlineKeyboardButton(text="🗑 УДАЛИТЬ КЕЙС", callback_data=f"delcase_{key}")])
@@ -1280,6 +1457,53 @@ async def edit_item_chance(message: Message, state: FSMContext):
         await state.clear()
     except: await message.answer("Ошибка")
 
+@dp.callback_query(F.data.startswith("edititemchance_"))
+async def edit_item_chance_prompt(cb: CallbackQuery, state: FSMContext):
+    try:
+        item_id = int(cb.data.split("_")[1])
+        await state.update_data(edit_item_chance_id=item_id)
+        await cb.message.edit_text("Введите новый реальный вес (шанс) для этого предмета (например, 5.0):", reply_markup=back_btn("admin_cases"))
+        await state.set_state(AdminState.waiting_edit_item_weight)
+        await cb.answer()
+    except: await cb.answer("Ошибка", show_alert=True)
+
+@dp.callback_query(F.data.startswith("edititemfake_"))
+async def edit_item_fake_prompt(cb: CallbackQuery, state: FSMContext):
+    try:
+        item_id = int(cb.data.split("_")[1])
+        await state.update_data(edit_item_fake_id=item_id)
+        await cb.message.edit_text("Введите липовый шанс для отображения (например, '10%'):", reply_markup=back_btn("admin_cases"))
+        await state.set_state(AdminState.waiting_edit_item_chance)
+        await cb.answer()
+    except: await cb.answer("Ошибка", show_alert=True)
+
+@dp.message(AdminState.waiting_edit_item_weight)
+async def save_item_weight(message: Message, state: FSMContext):
+    try:
+        data = await state.get_data()
+        item_id = data.get('edit_item_chance_id')
+        if not item_id: return
+        weight = float(message.text)
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("UPDATE case_items SET weight = ? WHERE id = ?", (weight, item_id))
+            await db.commit()
+        await message.answer(f"✅ Вес (реальный шанс) обновлен: {weight}", reply_markup=await admin_menu(3, message.from_user.id))
+        await state.clear()
+    except: await message.answer("Ошибка")
+
+@dp.message(AdminState.waiting_edit_item_chance)
+async def save_item_fake(message: Message, state: FSMContext):
+    try:
+        data = await state.get_data()
+        item_id = data.get('edit_item_fake_id')
+        if not item_id: return
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("UPDATE case_items SET display_chance = ? WHERE id = ?", (message.text, item_id))
+            await db.commit()
+        await message.answer(f"✅ Липовый шанс обновлен: {message.text}", reply_markup=await admin_menu(3, message.from_user.id))
+        await state.clear()
+    except: await message.answer("Ошибка")
+
 @dp.callback_query(F.data == "add_case")
 async def add_case_start(cb: CallbackQuery, state: FSMContext):
     try:
@@ -1348,7 +1572,7 @@ async def add_item_value(message: Message, state: FSMContext):
     try:
         if not message.text.isdigit(): return await message.answer("Число!")
         await state.update_data(value=int(message.text))
-        await message.answer("Вес:")
+        await message.answer("Вес (реальный шанс):")
         await state.set_state(AdminState.waiting_item_weight)
     except: await message.answer("Ошибка")
 
@@ -1357,7 +1581,7 @@ async def add_item_weight(message: Message, state: FSMContext):
     try:
         w = float(message.text)
         await state.update_data(weight=w)
-        await message.answer("Шанс ('50%'):")
+        await message.answer("Липовый шанс (например '50%'):")
         await state.set_state(AdminState.waiting_item_chance)
     except: await message.answer("Число!")
 
