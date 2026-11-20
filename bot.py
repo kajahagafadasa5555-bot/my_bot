@@ -24,21 +24,45 @@ CARD_BANK = "Беларусь Банк"
 DB_PATH = "bot.db"
 USD_TO_BYN = 2.9943
 
+# ⚠️ КАНАЛ ДЛЯ ОБЯЗАТЕЛЬНОЙ ПОДПИСКИ
+CHANNEL_ID = "@casehab"
+CHANNEL_LINK = "https://t.me/casehab"
+
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
+# ================= ПРОВЕРКА ПОДПИСКИ =================
+async def check_sub(user_id: int) -> bool:
+    if user_id in ADMIN_IDS:
+        return True
+    try:
+        member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
+        return member.status in ["creator", "administrator", "member"]
+    except Exception as e:
+        logging.error(f"Ошибка проверки подписки: {e}")
+        return True
+
+async def require_sub(cb_or_msg, user_id: int, action_callback: str = None) -> bool:
+    if await check_sub(user_id):
+        return True
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📢 ПОДПИСАТЬСЯ", url=CHANNEL_LINK)],
+        [InlineKeyboardButton(text="✅ ПРОВЕРИТЬ", callback_data=action_callback or "check_sub_again")]
+    ])
+    text = "🚫 <b>ДЛЯ ДОСТУПА НУЖНА ПОДПИСКА!</b>\n\nПодпишитесь на канал и нажмите «Проверить»:"
+    if isinstance(cb_or_msg, CallbackQuery):
+        await cb_or_msg.answer("❌ Подпишитесь на канал!", show_alert=True)
+        try: await cb_or_msg.message.edit_text(text, reply_markup=kb)
+        except: pass
+    else:
+        await cb_or_msg.answer(text, reply_markup=kb)
+    return False
+
 # ================= ГЛОБАЛЬНЫЙ ПЕРЕХВАТ ОШИБОК =================
 async def send_error_to_admin(update_type: str, error: Exception, user_id: int, data: str = ""):
     tb = traceback.format_exc()
-    text = (
-        f"🚨 <b>ОШИБКА В БОТЕ</b>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"👤 <b>Юзер:</b> <code>{user_id}</code>\n"
-        f"📌 <b>Где:</b> {update_type} | {data}\n"
-        f"❌ <b>Ошибка:</b> <code>{str(error)}</code>\n\n"
-        f"📝 <b>Трейс:</b>\n<pre>{tb[-1000:]}</pre>"
-    )
+    text = f"🚨 <b>ОШИБКА</b>\n👤 {user_id}\n📌 {update_type} | {data}\n❌ <code>{str(error)}</code>\n<pre>{tb[-1000:]}</pre>"
     for admin in ADMIN_IDS:
         try: await bot.send_message(admin, text)
         except: pass
@@ -48,10 +72,7 @@ async def global_error_handler(event: types.ErrorEvent):
     try:
         update = event.update
         exc = event.exception
-        user_id = 0
-        data = ""
-        update_type = "Unknown"
-        
+        user_id, data, update_type = 0, "", "Unknown"
         if update.callback_query:
             user_id = update.callback_query.from_user.id
             data = update.callback_query.data
@@ -60,10 +81,8 @@ async def global_error_handler(event: types.ErrorEvent):
             user_id = update.message.from_user.id
             data = update.message.text or ""
             update_type = "Message"
-            
         await send_error_to_admin(update_type, exc, user_id, data)
-    except Exception as e:
-        logging.error(f"Error in error handler: {e}")
+    except Exception as e: logging.error(f"Error handler: {e}")
 
 # ================= БАЗА ДАННЫХ =================
 async def init_db():
@@ -74,7 +93,8 @@ async def init_db():
             referrer_id INTEGER, referrals INTEGER DEFAULT 0,
             last_bonus TEXT DEFAULT '', xp INTEGER DEFAULT 0, level INTEGER DEFAULT 1,
             jackpot_contribution INTEGER DEFAULT 0, wins_count INTEGER DEFAULT 0,
-            bonus_streak INTEGER DEFAULT 0)""")
+            bonus_streak INTEGER DEFAULT 0, tickets INTEGER DEFAULT 0,
+            case_counter INTEGER DEFAULT 0)""")
         await db.execute("CREATE TABLE IF NOT EXISTS inventory (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, item_name TEXT, rarity TEXT, value INTEGER, is_withdrawn INTEGER DEFAULT 0)")
         await db.execute("CREATE TABLE IF NOT EXISTS coupons (code TEXT PRIMARY KEY, user_id INTEGER, item_name TEXT, status TEXT DEFAULT 'pending')")
         await db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
@@ -92,13 +112,13 @@ async def init_db():
         await db.execute("CREATE TABLE IF NOT EXISTS pity (user_id INTEGER, case_key TEXT, fail_count INTEGER DEFAULT 0, PRIMARY KEY (user_id, case_key))")
         await db.execute("CREATE TABLE IF NOT EXISTS button_names (key TEXT PRIMARY KEY, text TEXT)")
         await db.execute("""CREATE TABLE IF NOT EXISTS star_orders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, item_key TEXT, 
-            item_name TEXT, price_byn REAL, status TEXT DEFAULT 'pending', 
+            id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, item_key TEXT,
+            item_name TEXT, price_byn REAL, status TEXT DEFAULT 'pending',
             created_at TEXT)""")
 
         async with db.execute("PRAGMA table_info(users)") as cur:
             columns = [row[1] for row in await cur.fetchall()]
-        needed_columns = {"xp": "INTEGER DEFAULT 0", "level": "INTEGER DEFAULT 1", "jackpot_contribution": "INTEGER DEFAULT 0", "wins_count": "INTEGER DEFAULT 0", "bonus_streak": "INTEGER DEFAULT 0"}
+        needed_columns = {"xp": "INTEGER DEFAULT 0", "level": "INTEGER DEFAULT 1", "jackpot_contribution": "INTEGER DEFAULT 0", "wins_count": "INTEGER DEFAULT 0", "bonus_streak": "INTEGER DEFAULT 0", "tickets": "INTEGER DEFAULT 0", "case_counter": "INTEGER DEFAULT 0"}
         for col, col_type in needed_columns.items():
             if col not in columns: await db.execute(f"ALTER TABLE users ADD COLUMN {col} {col_type}")
 
@@ -109,13 +129,9 @@ async def init_db():
         ]
         for k, v in defaults: await db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
 
-        star_prices = {"50": 1.19, "100": 2.39, "150": 3.69, "250": 6.09, "500": 11.99, "1000": 23.99, "10000": 239.00, "prem3": 17.99, "prem6": 22.99, "prem12": 39.99}
-        for k, v in star_prices.items():
-            await db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (f"price_{k}_usd", str(v)))
-
         btn_defaults = {
             "btn_cases": "🎁 КЕЙСЫ", "btn_games": "🎮 ИГРЫ", "btn_quests": "🎯 КВЕСТЫ", "btn_achievements": "🏆 ДОСТИЖЕНИЯ",
-            "btn_bonus": "🎁 БОНУС", "btn_wheel": "🎰 КОЛЕСО", "btn_shop": "🛒 МАГАЗИН", "btn_buy_stars": "⭐ STARS/ПРЕМКА",
+            "btn_bonus": "🎁 БОНУС", "btn_wheel": "🎰 РУЛЕТКА", "btn_shop": "🛒 МАГАЗИН", "btn_buy_stars": "⭐ STARS/ПРЕМКА",
             "btn_inv": "🎒 ИНВЕНТАРЬ", "btn_prof": "👤 ПРОФИЛЬ", "btn_top": "🏆 ТОП", "btn_promo": "🔑 ПРОМОКОД",
             "btn_ref": "👥 РЕФЕРАЛЫ", "btn_crash": "🎰 CRASH", "btn_commands": "📜 КОМАНДЫ", "btn_about": "ℹ️ О БОТЕ",
             "btn_admin_panel": "👑 АДМИН ПАНЕЛЬ"
@@ -128,16 +144,39 @@ async def init_db():
 
         async with db.execute("SELECT COUNT(*) FROM cases") as cur:
             if (await cur.fetchone())[0] == 0:
-                cases_data = [("poor", "🥺 Нищий", 15, 5, 15000), ("rich", "👑 Богатый", 100, 30, 100000), ("nft", "💎 NFT Кейс", 700, 250, 1000000)]
-                for c in cases_data: await db.execute("INSERT INTO cases (key, name, price, coin_price, mon_price) VALUES (?, ?, ?, ?, ?)", c)
-                items_data = [
-                    ("poor", "2 звезды", "common", 2, 70, "50%"), ("poor", "5 звезд", "rare", 5, 25, "30%"), ("poor", "20 звезд", "epic", 20, 5, "15%"), ("poor", "💎 Алмаз", "legendary", 500, 3, "4%"), ("poor", "🚀 Ракета", "legendary", 1000, 1.5, "0.8%"), ("poor", "🏆 Кубок", "mythic", 5000, 0.5, "0.2%"),
-                    ("rich", "10 звезд", "common", 10, 60, "50%"), ("rich", "50 звезд", "rare", 50, 30, "40%"), ("rich", "NFT Кубок", "epic", 500, 9, "9%"), ("rich", "👑 Корона", "legendary", 2500, 1, "1%"),
-                    ("nft", "50 звезд", "common", 50, 60, "60%"), ("nft", "100 звезд", "rare", 100, 25, "25%"), ("nft", "Сердечко", "epic", 200, 10, "10%"), ("nft", "🚀 Ракета", "legendary", 1000, 4, "4%"), ("nft", "👑 ТОП NFT", "mythic", 5000, 1, "1%")
+                cases_data = [
+                    ("poor", "🥺 Нищий", 15, 5, 15000),
+                    ("rich", "👑 Богатый", 100, 30, 100000),
+                    ("nft", "💎 NFT Кейс", 700, 250, 1000000)
                 ]
-                for i in items_data: await db.execute("INSERT INTO case_items (case_key, name, rarity, value, weight, display_chance) VALUES (?, ?, ?, ?, ?, ?)", i)
+                for c in cases_data:
+                    await db.execute("INSERT INTO cases (key, name, price, coin_price, mon_price) VALUES (?, ?, ?, ?, ?)", c)
+
+                items_data = [
+                    ("poor", "Сердечко ❤️", "common", 15, 70.0, "70%"),
+                    ("poor", "Мишка 🧸", "common", 15, 29.5, "29.5%"),
+                    ("poor", "Роза 🌹", "rare", 25, 0.4, "0.4%"),
+                    ("poor", "Ракета 🚀", "epic", 50, 0.09, "0.09%"),
+                    ("poor", "Кубок 🏆", "legendary", 100, 0.01, "0.01%"),
+                    ("poor", "Бриллиант 💎", "mythic", 100, 0.0, "0%"),
+                    ("rich", "Сердечко ❤️", "common", 15, 60.0, "60%"),
+                    ("rich", "Мишка 🧸", "common", 15, 25.0, "25%"),
+                    ("rich", "Роза 🌹", "rare", 25, 10.0, "10%"),
+                    ("rich", "Ракета 🚀", "epic", 50, 4.0, "4%"),
+                    ("rich", "Кубок 🏆", "legendary", 100, 0.9, "0.9%"),
+                    ("rich", "Бриллиант 💎", "mythic", 100, 0.1, "0.1%"),
+                    ("nft", "Роза 🌹", "common", 25, 50.0, "50%"),
+                    ("nft", "Ракета 🚀", "common", 50, 30.0, "30%"),
+                    ("nft", "Кубок 🏆", "rare", 100, 15.0, "15%"),
+                    ("nft", "Бриллиант 💎", "epic", 100, 4.0, "4%"),
+                    ("nft", "Корона 👑", "legendary", 250, 0.9, "0.9%"),
+                    ("nft", "ТОП NFT 💎", "mythic", 500, 0.1, "0.1%")
+                ]
+                for i in items_data:
+                    await db.execute("INSERT INTO case_items (case_key, name, rarity, value, weight, display_chance) VALUES (?, ?, ?, ?, ?, ?)", i)
         await db.commit()
 
+# ================= УТИЛИТЫ =================
 async def get_setting(key):
     try:
         async with aiosqlite.connect(DB_PATH) as db:
@@ -178,6 +217,7 @@ async def add_user(user_id, username, full_name, ref_id=None):
                     await db.execute("INSERT INTO users (user_id, username, full_name, referrer_id) VALUES (?, ?, ?, ?)", (user_id, username, full_name, ref_id))
                     if ref_id: await db.execute("UPDATE users SET referrals = referrals + 1 WHERE user_id = ?", (ref_id,))
                 else:
+                    # Всегда обновляем username и full_name при входе
                     await db.execute("UPDATE users SET username = ?, full_name = ? WHERE user_id = ?", (username, full_name, user_id))
                 await db.commit()
     except Exception as e: logging.error(f"add_user error: {e}")
@@ -192,7 +232,7 @@ async def safe_get_user(user_id, username="", full_name=""):
                     async with db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)) as cur2:
                         row = await cur2.fetchone()
                 if not row:
-                    return {"user_id": user_id, "username": username, "full_name": full_name, "balance": 1000, "coins": 0, "referrals": 0, "last_bonus": "", "xp": 0, "level": 1, "wins_count": 0, "bonus_streak": 0}
+                    return {"user_id": user_id, "username": username, "full_name": full_name, "balance": 1000, "coins": 0, "referrals": 0, "last_bonus": "", "xp": 0, "level": 1, "wins_count": 0, "bonus_streak": 0, "tickets": 0, "case_counter": 0}
                 return {
                     "user_id": row[0], "username": row[1] or "", "full_name": row[2] or "Игрок",
                     "balance": row[3] or 0, "coins": row[4] or 0,
@@ -202,14 +242,15 @@ async def safe_get_user(user_id, username="", full_name=""):
                     "level": row[10] if len(row) > 10 and row[10] else 1,
                     "wins_count": row[12] if len(row) > 12 and row[12] else 0,
                     "bonus_streak": row[13] if len(row) > 13 and row[13] else 0,
+                    "tickets": row[14] if len(row) > 14 and row[14] else 0,
+                    "case_counter": row[15] if len(row) > 15 and row[15] else 0,
                 }
     except Exception as e:
         logging.error(f"safe_get_user error: {e}")
-        return {"user_id": user_id, "username": username, "full_name": full_name, "balance": 1000, "coins": 0, "referrals": 0, "last_bonus": "", "xp": 0, "level": 1, "wins_count": 0, "bonus_streak": 0}
+        return {"user_id": user_id, "username": username, "full_name": full_name, "balance": 1000, "coins": 0, "referrals": 0, "last_bonus": "", "xp": 0, "level": 1, "wins_count": 0, "bonus_streak": 0, "tickets": 0, "case_counter": 0}
 
 async def upd_bal(user_id, amount, is_coin=False, add_jackpot=True):
     try:
-        if amount <= 0 and not is_coin: pass 
         async with aiosqlite.connect(DB_PATH) as db:
             if is_coin: await db.execute("UPDATE users SET coins = coins + ? WHERE user_id = ?", (amount, user_id))
             else:
@@ -217,6 +258,13 @@ async def upd_bal(user_id, amount, is_coin=False, add_jackpot=True):
                 if amount < 0 and add_jackpot: await db.execute("UPDATE jackpot SET amount = amount + ? WHERE id = 1", (abs(amount) // 10,))
             await db.commit()
     except Exception as e: logging.error(f"upd_bal error: {e}")
+
+async def upd_tickets(user_id, amount):
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("UPDATE users SET tickets = tickets + ? WHERE user_id = ?", (amount, user_id))
+            await db.commit()
+    except: pass
 
 async def add_xp(user_id, xp):
     try:
@@ -261,7 +309,7 @@ async def add_hr_log(admin_id, action, details=""):
             await db.commit()
     except: pass
 
-# ================= КЕЙСЫ =================
+# ================= КЕЙСЫ ЛОГИКА =================
 async def get_cases():
     try:
         async with aiosqlite.connect(DB_PATH) as db:
@@ -297,18 +345,27 @@ async def open_case(case_key, user_id):
     try:
         items = await get_case_items(case_key)
         if not items: return (0, "Пусто", "common", 0, 0, "0%")
-        threshold = int(await get_setting("pity_threshold") or 30)
-        fails = await get_pity(user_id, case_key)
-        if fails >= threshold:
-            rare_items = [i for i in items if i[2] in ("legendary", "mythic")]
-            if rare_items:
-                chosen = random.choices(rare_items, weights=[i[4] for i in rare_items], k=1)[0]
-                await update_pity(user_id, case_key, increment=False)
-                return chosen
-        weights = [i[4] for i in items]
-        chosen = random.choices(items, weights=weights, k=1)[0]
+
+        user = await safe_get_user(user_id)
+        counter = user.get('case_counter', 0)
+        sorted_items = sorted(items, key=lambda x: x[3])
+
+        if counter == 0:
+            chosen = sorted_items[0]
+        elif counter % 4 == 3:
+            rare_items = sorted_items[-2:]
+            chosen = random.choice(rare_items) if rare_items else sorted_items[0]
+        else:
+            cheap_items = sorted_items[:2]
+            chosen = random.choices(cheap_items, weights=[i[4] for i in cheap_items], k=1)[0] if cheap_items else sorted_items[0]
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("UPDATE users SET case_counter = case_counter + 1 WHERE user_id = ?", (user_id,))
+            await db.commit()
+
         if chosen[2] in ("legendary", "mythic"): await update_pity(user_id, case_key, increment=False)
         else: await update_pity(user_id, case_key, increment=True)
+
         return chosen
     except Exception as e:
         logging.error(f"open_case error: {e}")
@@ -421,16 +478,20 @@ async def cmd_start(message: Message):
     try:
         if await get_setting("maintenance") == "True" and await get_admin_rank(message.from_user.id) == 0:
             return await message.answer("🛠 <b>НА БОТЕ ТЕХНИЧЕСКИЕ РАБОТЫ.</b>")
+
+        if not await require_sub(message, message.from_user.id):
+            return
+
         u = message.from_user
         args = message.text.split()
         ref_id = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
         if ref_id == u.id: ref_id = None
         await add_user(u.id, u.username or "", u.full_name, ref_id)
         user = await safe_get_user(u.id, u.username, u.full_name)
-        
+
         if await check_achievement(u.id, "start"):
             await message.answer("🏅 <b>ДОСТИЖЕНИЕ:</b> Первый шаг!")
-            
+
         text = (
             f"👋 <b>ДОБРО ПОЖАЛОВАТЬ, {user['full_name'].upper()}!</b>\n━━━━━━━━━━━━━━━━━━\n"
             f"💰 <b>Монеты:</b> {user['balance']}\n💎 <b>Коэны:</b> {user['coins']}\n"
@@ -442,10 +503,23 @@ async def cmd_start(message: Message):
         logging.error(f"cmd_start error: {e}")
         await message.answer("⚠️ Ошибка, попробуйте /menu")
 
+@dp.callback_query(F.data == "check_sub_again")
+async def check_sub_again(cb: CallbackQuery):
+    if await check_sub(cb.from_user.id):
+        await cb.answer("✅ Подписка подтверждена!", show_alert=True)
+        await cb.message.delete()
+        class FakeMsg:
+            def __init__(self, m): self.text = "/start"; self.from_user = cb.from_user
+            async def answer(self, *a, **k): pass
+        await cmd_start(FakeMsg(cb.message))
+    else:
+        await cb.answer("❌ Вы всё ещё не подписаны!", show_alert=True)
+
 @dp.callback_query(F.data == "back_main")
 async def back_main(cb: CallbackQuery, state: FSMContext):
+    if not await require_sub(cb, cb.from_user.id): return
     try:
-        await state.clear() # Защита от зависания
+        await state.clear()
         user = await safe_get_user(cb.from_user.id, cb.from_user.username, cb.from_user.full_name)
         text = (
             f"🏠 <b>ГЛАВНОЕ МЕНЮ</b>\n━━━━━━━━━━━━━━━━━━\n"
@@ -460,6 +534,7 @@ async def back_main(cb: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "about")
 async def about_bot(cb: CallbackQuery):
+    if not await require_sub(cb, cb.from_user.id): return
     try:
         text = f"ℹ️ <b>О БОТЕ</b>\n━━━━━━━━━━━━━━━━━━\nЛучший бот для открытия кейсов!\n\n📩 <b>Поддержка:</b> {CONTACT_ADMIN}"
         await cb.message.edit_text(text, reply_markup=back_btn())
@@ -468,11 +543,12 @@ async def about_bot(cb: CallbackQuery):
 
 @dp.callback_query(F.data == "commands")
 async def commands_menu(cb: CallbackQuery):
+    if not await require_sub(cb, cb.from_user.id): return
     try:
         text = (
             f"📜 <b>ВСЕ КОМАНДЫ</b>\n━━━━━━━━━━━━━━━━━━\n"
             f"🎁 Кейсы, 🎮 Игры, 🎯 Квесты, 🏆 Достижения\n"
-            f"🎁 Бонус (streak!), 🎰 Колесо, 🛒 Магазин, ⭐ Stars\n"
+            f"🎁 Бонус (streak!), 🎰 Рулетка, 🛒 Магазин, ⭐ Stars\n"
             f"🎒 Инвентарь, 👤 Профиль, 🏆 Топ, 🔑 Промокод\n"
             f"👥 Рефералы, 🎰 Crash\n\n"
             f"⚙️ <b>Команды:</b>\n"
@@ -485,6 +561,7 @@ async def commands_menu(cb: CallbackQuery):
 
 @dp.callback_query(F.data == "prof")
 async def prof(cb: CallbackQuery):
+    if not await require_sub(cb, cb.from_user.id): return
     try:
         user = await safe_get_user(cb.from_user.id, cb.from_user.username, cb.from_user.full_name)
         achievements_count = 0
@@ -494,10 +571,12 @@ async def prof(cb: CallbackQuery):
         text = (
             f"👤 <b>ПРОФИЛЬ</b>\n━━━━━━━━━━━━━━━━━━\n"
             f"🆔 <b>ID:</b> <code>{user['user_id']}</code>\n"
+            f"👤 <b>Юзернейм:</b> @{user['username'] or 'нет'}\n"
             f"💰 <b>Монеты:</b> {user['balance']}\n💎 <b>Коэны:</b> {user['coins']}\n"
             f"⭐ <b>Уровень:</b> {user['level']} (XP: {user['xp']})\n"
             f"🔥 <b>Серия бонусов:</b> {user['bonus_streak']} дн.\n"
             f"🏆 <b>Побед:</b> {user['wins_count']}\n👥 <b>Рефералы:</b> {user['referrals']}/3\n"
+            f"🎟️ <b>Билеты:</b> {user['tickets']}\n"
             f"🏅 <b>Достижения:</b> {achievements_count}\n━━━━━━━━━━━━━━━━━━"
         )
         await cb.message.edit_text(text, reply_markup=back_btn())
@@ -506,6 +585,7 @@ async def prof(cb: CallbackQuery):
 
 @dp.callback_query(F.data == "achievements")
 async def achievements_menu(cb: CallbackQuery):
+    if not await require_sub(cb, cb.from_user.id): return
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute("SELECT achievement_key FROM achievements WHERE user_id = ?", (cb.from_user.id,)) as cur:
@@ -524,17 +604,19 @@ async def achievements_menu(cb: CallbackQuery):
 
 @dp.callback_query(F.data == "ref")
 async def ref(cb: CallbackQuery):
+    if not await require_sub(cb, cb.from_user.id): return
     try:
         bot_info = await bot.get_me()
         link = f"https://t.me/{bot_info.username}?start={cb.from_user.id}"
         user = await safe_get_user(cb.from_user.id, cb.from_user.username, cb.from_user.full_name)
-        text = f"👥 <b>РЕФЕРАЛЫ</b>\n━━━━━━━━━━━━━━━━━━\nПригласи 3 друзей и получи доступ к выводу!\nВаши рефералы: {user['referrals']}/3\n\n🔗 <b>Твоя ссылка:</b>\n<code>{link}</code>"
+        text = f"👥 <b>РЕФЕРАЛЫ</b>\n━━━━━━━━━━━━━━━━━━\nПригласи 2 друзей и получи 1 билет на рулетку!\nВаши рефералы: {user['referrals']}\n🎟️ Билеты: {user['tickets']}\n\n🔗 <b>Твоя ссылка:</b>\n<code>{link}</code>"
         await cb.message.edit_text(text, reply_markup=back_btn())
         await cb.answer()
     except: await cb.answer("Ошибка", show_alert=True)
 
 @dp.callback_query(F.data == "top_players")
 async def top_players(cb: CallbackQuery):
+    if not await require_sub(cb, cb.from_user.id): return
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute("SELECT full_name, balance FROM users ORDER BY balance DESC LIMIT 5") as cur:
@@ -548,6 +630,7 @@ async def top_players(cb: CallbackQuery):
 # ================= БОНУСЫ / КОЛЕСО =================
 @dp.callback_query(F.data == "daily_bonus")
 async def daily_bonus(cb: CallbackQuery):
+    if not await require_sub(cb, cb.from_user.id): return
     try:
         user = await safe_get_user(cb.from_user.id, cb.from_user.username, cb.from_user.full_name)
         today = datetime.date.today()
@@ -570,7 +653,14 @@ async def daily_bonus(cb: CallbackQuery):
 
 @dp.callback_query(F.data == "wheel")
 async def wheel_spin(cb: CallbackQuery):
+    if not await require_sub(cb, cb.from_user.id): return
     try:
+        user = await safe_get_user(cb.from_user.id, cb.from_user.username, cb.from_user.full_name)
+        if user['tickets'] <= 0:
+            return await cb.answer("🎟️ У вас нет билетов! Пригласите 2 друзей, чтобы получить билет.", show_alert=True)
+        
+        await upd_tickets(cb.from_user.id, -1)
+        
         prizes = [100, 500, 1000, 5000, 10000, 50000, "ДЖЕКПОТ"]
         weights = [40, 25, 15, 10, 7, 2.9, 0.1]
         prize = random.choices(prizes, weights=weights, k=1)[0]
@@ -593,6 +683,7 @@ async def wheel_spin(cb: CallbackQuery):
 # ================= КВЕСТЫ =================
 @dp.callback_query(F.data == "quests")
 async def quests_menu(cb: CallbackQuery):
+    if not await require_sub(cb, cb.from_user.id): return
     try:
         quests = {"open_1": {"name": "Открой 1 кейс", "target": 1, "reward": 2000}, "upgrade_1": {"name": "Сделай 1 ставку", "target": 1, "reward": 3000}, "ref_1": {"name": "Пригласи 1 друга", "target": 1, "reward": 5000}}
         text = "🎯 <b>КВЕСТЫ</b>\n━━━━━━━━━━━━━━━━━━\n"
@@ -624,6 +715,7 @@ async def update_quest_progress(user_id, quest_type):
 
 @dp.callback_query(F.data.startswith("claim_"))
 async def claim_quest(cb: CallbackQuery):
+    if not await require_sub(cb, cb.from_user.id): return
     try:
         q_key = cb.data.split("_")[1]
         quests = {"open_1": 2000, "upgrade_1": 3000, "ref_1": 5000}
@@ -644,6 +736,7 @@ async def claim_quest(cb: CallbackQuery):
 # ================= CRASH =================
 @dp.callback_query(F.data == "crash_game")
 async def crash_game(cb: CallbackQuery, state: FSMContext):
+    if not await require_sub(cb, cb.from_user.id): return
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute("SELECT amount FROM jackpot WHERE id = 1") as cur:
@@ -656,6 +749,7 @@ async def crash_game(cb: CallbackQuery, state: FSMContext):
 
 @dp.message(UserState.waiting_crash_bet)
 async def crash_bet(message: Message, state: FSMContext):
+    if not await require_sub(message, message.from_user.id): return
     try:
         if not message.text.isdigit(): return await message.answer("❌ ВВЕДИ ЧИСЛО!")
         bet = int(message.text)
@@ -685,6 +779,7 @@ async def crash_bet(message: Message, state: FSMContext):
 
 @dp.callback_query(F.data == "crash_take")
 async def crash_take(cb: CallbackQuery, state: FSMContext):
+    if not await require_sub(cb, cb.from_user.id): return
     try:
         data = await state.get_data()
         bet = data.get("bet", 0)
@@ -702,6 +797,7 @@ async def crash_take(cb: CallbackQuery, state: FSMContext):
 # ================= МАГАЗИН И КЕЙСЫ =================
 @dp.callback_query(F.data == "shop")
 async def shop_menu(cb: CallbackQuery):
+    if not await require_sub(cb, cb.from_user.id): return
     try:
         price = await get_setting("shop_price") or "100000"
         text = f"🛒 <b>МАГАЗИН</b>\n━━━━━━━━━━━━━━━━━━\n💱 <b>Курс:</b> {price} Монет = 10 Коэнов\n\nВведите количество Коэнов (кратно 10):"
@@ -711,6 +807,7 @@ async def shop_menu(cb: CallbackQuery):
 
 @dp.callback_query(F.data == "cases")
 async def cases_menu(cb: CallbackQuery):
+    if not await require_sub(cb, cb.from_user.id): return
     try:
         cases = await get_cases()
         kb = []
@@ -722,6 +819,7 @@ async def cases_menu(cb: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("view_"))
 async def view_case(cb: CallbackQuery):
+    if not await require_sub(cb, cb.from_user.id): return
     try:
         key = cb.data.split("_")[1]
         cases = await get_cases()
@@ -742,6 +840,7 @@ async def view_case(cb: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("open_") & F.data.endswith("_stars"))
 async def open_stars(cb: CallbackQuery):
+    if not await require_sub(cb, cb.from_user.id): return
     try:
         key = cb.data.split("_")[1]
         cases = await get_cases()
@@ -754,6 +853,7 @@ async def open_stars(cb: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("open_") & F.data.endswith("_coins"))
 async def open_coins(cb: CallbackQuery):
+    if not await require_sub(cb, cb.from_user.id): return
     try:
         if await get_setting("panic") == "True": return await cb.answer("🚨 БОТ НА ПАНИКЕ!", show_alert=True)
         key = cb.data.split("_")[1]
@@ -777,6 +877,7 @@ async def open_coins(cb: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("open_") & F.data.endswith("_mon"))
 async def open_mon(cb: CallbackQuery):
+    if not await require_sub(cb, cb.from_user.id): return
     try:
         if await get_setting("panic") == "True": return await cb.answer("🚨 БОТ НА ПАНИКЕ!", show_alert=True)
         key = cb.data.split("_")[1]
@@ -810,6 +911,7 @@ async def on_pay(message: Message):
 
 @dp.callback_query(F.data == "inv")
 async def inv(cb: CallbackQuery):
+    if not await require_sub(cb, cb.from_user.id): return
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute("SELECT id, item_name, value FROM inventory WHERE user_id = ? AND is_withdrawn = 0", (cb.from_user.id,)) as cur:
@@ -827,6 +929,7 @@ async def inv(cb: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("sell_"))
 async def sell(cb: CallbackQuery):
+    if not await require_sub(cb, cb.from_user.id): return
     try:
         item_id = int(cb.data.split("_")[1])
         async with aiosqlite.connect(DB_PATH) as db:
@@ -843,6 +946,7 @@ async def sell(cb: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("withdraw_"))
 async def withdraw(cb: CallbackQuery):
+    if not await require_sub(cb, cb.from_user.id): return
     try:
         item_id = int(cb.data.split("_")[1])
         user = await safe_get_user(cb.from_user.id, cb.from_user.username, cb.from_user.full_name)
@@ -863,6 +967,7 @@ async def withdraw(cb: CallbackQuery):
 # ================= ИГРЫ =================
 @dp.callback_query(F.data == "games")
 async def games(cb: CallbackQuery):
+    if not await require_sub(cb, cb.from_user.id): return
     try:
         bj_chance = await get_setting("bj_chance") or "20"
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -878,6 +983,7 @@ async def games(cb: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("game_"))
 async def game_bet(cb: CallbackQuery, state: FSMContext):
+    if not await require_sub(cb, cb.from_user.id): return
     try:
         await state.update_data(game=cb.data)
         await cb.message.edit_text("💰 <b>ВВЕДИ СУММУ СТАВКИ:</b>", reply_markup=back_btn("games"))
@@ -887,6 +993,7 @@ async def game_bet(cb: CallbackQuery, state: FSMContext):
 
 @dp.message(UserState.waiting_bet)
 async def play_game(message: Message, state: FSMContext):
+    if not await require_sub(message, message.from_user.id): return
     try:
         if not message.text.isdigit(): return await message.answer("❌ ВВЕДИ ЧИСЛО!")
         bet = int(message.text)
@@ -899,12 +1006,12 @@ async def play_game(message: Message, state: FSMContext):
         await upd_bal(message.from_user.id, -bet)
         await update_quest_progress(message.from_user.id, "bet")
         await add_xp(message.from_user.id, 5)
-        
+
         if game == "game_up": win = random.random() < (int(await get_setting("real_chance_up") or 50) / 100.0)
         elif game == "game_coin": win = random.random() < (int(await get_setting("real_chance_coin") or 50) / 100.0)
         elif game == "game_bj": win = random.random() < (int(await get_setting("real_chance_bj") or 20) / 100.0)
         else: win = False
-        
+
         if win:
             await upd_bal(message.from_user.id, bet * 2)
             async with aiosqlite.connect(DB_PATH) as db:
@@ -917,6 +1024,7 @@ async def play_game(message: Message, state: FSMContext):
 
 @dp.callback_query(F.data == "promo")
 async def promo_enter(cb: CallbackQuery, state: FSMContext):
+    if not await require_sub(cb, cb.from_user.id): return
     try:
         await cb.message.edit_text("🔑 <b>ВВЕДИ ПРОМОКОД:</b>", reply_markup=back_btn())
         await state.set_state(UserState.waiting_promo)
@@ -925,6 +1033,7 @@ async def promo_enter(cb: CallbackQuery, state: FSMContext):
 
 @dp.message(UserState.waiting_promo)
 async def promo_check(message: Message, state: FSMContext):
+    if not await require_sub(message, message.from_user.id): return
     try:
         code = message.text.upper().strip()
         await state.clear()
@@ -945,6 +1054,7 @@ async def promo_check(message: Message, state: FSMContext):
 # ================= ПОКУПКА ЗВЕЗД =================
 @dp.callback_query(F.data == "buy_stars")
 async def buy_stars_menu(cb: CallbackQuery):
+    if not await require_sub(cb, cb.from_user.id): return
     try:
         items = [("50", "50 ⭐ Stars", 1.19), ("100", "100 ⭐ Stars", 2.39), ("150", "150 ⭐ Stars", 3.69), ("250", "250 ⭐ Stars", 6.09), ("500", "500 ⭐ Stars", 11.99), ("1000", "1000 ⭐ Stars", 23.99), ("10000", "10000 ⭐ Stars", 239.00),
                  ("prem3", "👑 Premium 3 мес", 17.99), ("prem6", "👑 Premium 6 мес", 22.99), ("prem12", "👑 Premium 12 мес", 39.99)]
@@ -959,6 +1069,7 @@ async def buy_stars_menu(cb: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("order_"))
 async def create_star_order(cb: CallbackQuery):
+    if not await require_sub(cb, cb.from_user.id): return
     try:
         key = cb.data.split("_")[1]
         prices = {"50": 1.19, "100": 2.39, "150": 3.69, "250": 6.09, "500": 11.99, "1000": 23.99, "10000": 239.00, "prem3": 17.99, "prem6": 22.99, "prem12": 39.99}
@@ -966,12 +1077,12 @@ async def create_star_order(cb: CallbackQuery):
         usd = prices[key]
         byn = round(usd * USD_TO_BYN, 2)
         name = names[key]
-        
+
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("INSERT INTO star_orders (user_id, item_key, item_name, price_byn, status, created_at) VALUES (?, ?, ?, ?, 'pending', ?)",
                              (cb.from_user.id, key, name, byn, datetime.datetime.now().isoformat()))
             await db.commit()
-            
+
         text = f"⭐ <b>Заказ: {name}</b>\n\nСтоимость: <b>{usd}$</b> (~{byn} BYN)\n\n💳 <b>Реквизиты для оплаты:</b>\n<code>{CARD_NUMBER}</code> ({CARD_BANK})\n\n📩 Отправьте чек админу: {CONTACT_ADMIN}\n\n⚠️ После оплаты заказ появится в админ-панели для подтверждения."
         await cb.message.edit_text(text, reply_markup=back_btn("buy_stars"))
         await cb.answer()
@@ -1015,7 +1126,8 @@ async def admin_help(cb: CallbackQuery):
             "📊 <b>СТАТИСТИКА:</b>\n"
             "Показывает общее число юзеров, активных сегодня, денег в системе и джекпот.\n\n"
             "🎁 <b>КУПОНЫ:</b>\n"
-            "Позволяет проверить код купона, который ввел игрок, и подтвердить выдачу предмета.\n\n"
+            "Позволяет проверить код купона, который ввел игрок, и подтвердить выдачу предмета.\n"
+            "При проверке выводится: Имя, @username, ID.\n\n"
             "🔑 <b>ПРОМО:</b>\n"
             "Создание промокода. Вы задаете сумму награды и количество активаций. Бот выдаст код.\n\n"
             "🚫 <b>БАНЫ:</b>\n"
@@ -1145,10 +1257,10 @@ async def admin_confirm_stars(cb: CallbackQuery):
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute("SELECT id, user_id, item_name, price_byn, created_at FROM star_orders WHERE status = 'pending'") as cur:
                 orders = await cur.fetchall()
-        
+
         if not orders:
             return await cb.message.edit_text("✅ Нет новых заказов на Stars/Premium.", reply_markup=back_btn("close_admin"))
-        
+
         text = "✅ <b>НОВЫЕ ЗАКАЗЫ (ОЖИДАЮТ ОПЛАТЫ):</b>\n\n"
         kb = []
         for o in orders:
@@ -1156,7 +1268,7 @@ async def admin_confirm_stars(cb: CallbackQuery):
             text += f"🆔 Заказ #{order_id}\n👤 Юзер: {user_id}\n📦 Товар: {item_name}\n💰 Сумма: {price_byn} BYN\n\n"
             kb.append([InlineKeyboardButton(text=f"✅ Подтвердить #{order_id}", callback_data=f"confirm_order_{order_id}")])
         kb.append([InlineKeyboardButton(text="◀️ НАЗАД", callback_data="close_admin")])
-        
+
         await cb.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
         await cb.answer()
     except: await cb.answer("Ошибка", show_alert=True)
@@ -1172,7 +1284,7 @@ async def admin_confirm_order(cb: CallbackQuery):
             if not order: return await cb.answer("Заказ не найден!", show_alert=True)
             await db.execute("UPDATE star_orders SET status = 'confirmed' WHERE id = ?", (order_id,))
             await db.commit()
-            
+
         user_id, item_name = order
         await cb.message.edit_text(f"✅ Заказ #{order_id} подтверждён! Выдайте {item_name} пользователю {user_id} вручную.", reply_markup=back_btn("admin_confirm_stars"))
         try: await bot.send_message(user_id, f"🎉 Ваш заказ <b>{item_name}</b> подтверждён! Ожидайте выдачи.")
@@ -1620,14 +1732,22 @@ async def admin_check_coupon(message: Message, state: FSMContext):
         if await get_admin_rank(message.from_user.id) < 2: return
         code = message.text.strip().upper()
         await state.clear()
+        # ВЫВОДИМ ИМЯ, @USERNAME И ID
         async with aiosqlite.connect(DB_PATH) as db:
-            async with db.execute("SELECT c.user_id, c.item_name, u.full_name, c.status FROM coupons c JOIN users u ON c.user_id = u.user_id WHERE c.code = ?", (code,)) as cur:
+            async with db.execute("""
+                SELECT c.user_id, c.item_name, u.full_name, u.username, c.status 
+                FROM coupons c 
+                LEFT JOIN users u ON c.user_id = u.user_id 
+                WHERE c.code = ?
+            """, (code,)) as cur:
                 info = await cur.fetchone()
         if not info: return await message.answer("❌ Не найден.", reply_markup=await main_menu(message.from_user.id))
-        uid, item, name, status = info
+        uid, item, name, username, status = info
         if status == 'given': return await message.answer("⚠️ УЖЕ ВЫДАН!", reply_markup=await main_menu(message.from_user.id))
+        
+        user_info = f"👤 <b>{name or 'Игрок'}</b> (@{username or 'нет'}, ID: <code>{uid}</code>)"
         kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Я выдал", callback_data=f"givecoupon_{code}")]])
-        await message.answer(f"🔍 {name} ({uid})\n🎁 {item}", reply_markup=kb)
+        await message.answer(f"🔍 <b>КУПОН:</b> <code>{code}</code>\n\n{user_info}\n🎁 <b>Предмет:</b> {item}", reply_markup=kb)
     except: await message.answer("Ошибка при проверке купона")
 
 @dp.callback_query(F.data.startswith("givecoupon_"))
