@@ -15,7 +15,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 # ================= КОНФИГ =================
-BOT_TOKEN = os.environ.get("9254195561:AAE6CofEP8-YXxWig89-TqoH6JR3sLXvUYA" , "9254195561:AAE6CofEP8-YXxWig89-TqoH6JR3sLXvUYA")
+BOT_TOKEN = os.environ.get("9254195561:AAE6CofEP8-YXxWig89-TqoH6JR3sLXvUYA", "9254195561:AAE6CofEP8-YXxWig89-TqoH6JR3sLXvUYA")
 ADMIN_IDS = [8400799305]
 CONTACT_ADMIN = "@drag_monster_zl"
 CARD_NUMBER = "9112 3801 7930 6727"
@@ -29,7 +29,6 @@ dp = Dispatcher()
 # ================= БАЗА ДАННЫХ И МИГРАЦИЯ =================
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
-        # Создаем таблицы, если их нет
         await db.execute("""CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY, username TEXT, full_name TEXT,
             balance INTEGER DEFAULT 1000, coins INTEGER DEFAULT 0,
@@ -53,24 +52,18 @@ async def init_db():
         await db.execute("CREATE TABLE IF NOT EXISTS promo_activations (user_id INTEGER, code TEXT, PRIMARY KEY (user_id, code))")
         await db.execute("CREATE TABLE IF NOT EXISTS pity (user_id INTEGER, case_key TEXT, fail_count INTEGER DEFAULT 0, PRIMARY KEY (user_id, case_key))")
 
-        # АВТОМИГРАЦИЯ: Проверяем и добавляем недостающие колонки в users
+        # АВТОМИГРАЦИЯ
         async with db.execute("PRAGMA table_info(users)") as cur:
             columns = [row[1] for row in await cur.fetchall()]
-        
         needed_columns = {
-            "xp": "INTEGER DEFAULT 0",
-            "level": "INTEGER DEFAULT 1",
-            "jackpot_contribution": "INTEGER DEFAULT 0",
-            "wins_count": "INTEGER DEFAULT 0",
+            "xp": "INTEGER DEFAULT 0", "level": "INTEGER DEFAULT 1",
+            "jackpot_contribution": "INTEGER DEFAULT 0", "wins_count": "INTEGER DEFAULT 0",
             "bonus_streak": "INTEGER DEFAULT 0"
         }
-        
         for col, col_type in needed_columns.items():
             if col not in columns:
-                logging.info(f"Миграция БД: добавление колонки {col} в users")
                 await db.execute(f"ALTER TABLE users ADD COLUMN {col} {col_type}")
 
-        # Дефолтные настройки
         defaults = [
             ('maintenance', 'False'), ('panic', 'False'), ('bj_chance', '20'),
             ('shop_price', '100000'), ('price_50_stars', '50'), ('price_100_stars', '100'),
@@ -83,23 +76,16 @@ async def init_db():
         await db.execute("INSERT OR IGNORE INTO admins (user_id, rank) VALUES (?, 3)", (ADMIN_IDS[0],))
         await db.execute("INSERT OR IGNORE INTO jackpot (id, amount) VALUES (1, 0)")
 
-        # Дефолтные кейсы
         async with db.execute("SELECT COUNT(*) FROM cases") as cur:
             if (await cur.fetchone())[0] == 0:
-                cases_data = [
-                    ("poor", "🥺 Нищий", 15, 5, 15000),
-                    ("rich", "👑 Богатый", 100, 30, 100000),
-                    ("nft", "💎 NFT Кейс", 700, 250, 1000000)
-                ]
-                for c in cases_data:
-                    await db.execute("INSERT INTO cases (key, name, price, coin_price, mon_price) VALUES (?, ?, ?, ?, ?)", c)
+                cases_data = [("poor", "🥺 Нищий", 15, 5, 15000), ("rich", "👑 Богатый", 100, 30, 100000), ("nft", "💎 NFT Кейс", 700, 250, 1000000)]
+                for c in cases_data: await db.execute("INSERT INTO cases (key, name, price, coin_price, mon_price) VALUES (?, ?, ?, ?, ?)", c)
                 items_data = [
                     ("poor", "2 звезды", "common", 2, 70, "50%"), ("poor", "5 звезд", "rare", 5, 25, "30%"), ("poor", "20 звезд", "epic", 20, 5, "15%"), ("poor", "💎 Алмаз", "legendary", 500, 3, "4%"), ("poor", "🚀 Ракета", "legendary", 1000, 1.5, "0.8%"), ("poor", "🏆 Кубок", "mythic", 5000, 0.5, "0.2%"),
                     ("rich", "10 звезд", "common", 10, 60, "50%"), ("rich", "50 звезд", "rare", 50, 30, "40%"), ("rich", "NFT Кубок", "epic", 500, 9, "9%"), ("rich", "👑 Корона", "legendary", 2500, 1, "1%"),
                     ("nft", "50 звезд", "common", 50, 60, "60%"), ("nft", "100 звезд", "rare", 100, 25, "25%"), ("nft", "Сердечко", "epic", 200, 10, "10%"), ("nft", "🚀 Ракета", "legendary", 1000, 4, "4%"), ("nft", "👑 ТОП NFT", "mythic", 5000, 1, "1%")
                 ]
-                for i in items_data:
-                    await db.execute("INSERT INTO case_items (case_key, name, rarity, value, weight, display_chance) VALUES (?, ?, ?, ?, ?, ?)", i)
+                for i in items_data: await db.execute("INSERT INTO case_items (case_key, name, rarity, value, weight, display_chance) VALUES (?, ?, ?, ?, ?, ?)", i)
         await db.commit()
 
 async def get_setting(key):
@@ -136,7 +122,6 @@ async def get_user(user_id):
             return await cur.fetchone()
 
 async def safe_get_user(user_id, username, full_name):
-    """Безопасное получение пользователя с авто-созданием"""
     user = await get_user(user_id)
     if user is None:
         await add_user(user_id, username or "", full_name or "")
@@ -264,7 +249,7 @@ def main_menu(user_id):
 def back_btn(cb="back_main"): return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ НАЗАД", callback_data=cb)]])
 
 def admin_menu(rank, user_id):
-    kb = [[InlineKeyboardButton(text="📊 СТАТИСТИКА", callback_data="admin_stats"), InlineKeyboardButton(text="📜 МОИ ПРАВА", callback_data="my_rights")]]
+    kb = [[InlineKeyboardButton(text="📊 СТАТИСТИКА", callback_data="admin_stats"), InlineKeyboardButton(text="📖 СПРАВОЧНИК", callback_data="admin_help")]]
     if rank >= 2:
         kb.append([InlineKeyboardButton(text="🎁 КУПОН", callback_data="admin_coupon"), InlineKeyboardButton(text="🔑 ПРОМО", callback_data="admin_promo")])
         kb.append([InlineKeyboardButton(text="🚫 БАНЫ", callback_data="admin_bans")])
@@ -321,8 +306,9 @@ class AdminState(StatesGroup):
     waiting_edit_item_weight = State()
     waiting_edit_item_chance = State()
 
-# ================= ПОЛЬЗОВАТЕЛЬСКИЕ ХЭНДЛЕРЫ =================
+# ================= ОБРАБОТЧИКИ =================
 @dp.message(CommandStart())
+@dp.message(Command("menu"))
 async def cmd_start(message: Message):
     if await get_setting("maintenance") == "True" and await get_admin_rank(message.from_user.id) == 0:
         return await message.answer("🛠 <b>НА БОТЕ ТЕХНИЧЕСКИЕ РАБОТЫ.</b>")
@@ -369,7 +355,11 @@ async def commands_menu(cb: CallbackQuery):
         f"🎁 Кейсы, 🎮 Игры, 🎯 Квесты, 🏆 Достижения\n"
         f"🎁 Бонус (streak!), 🎰 Колесо, 🛒 Магазин, ⭐ Stars\n"
         f"🎒 Инвентарь, 👤 Профиль, 🏆 Топ, 🔑 Промокод\n"
-        f"👥 Рефералы, 🎰 Crash\n\n👑 <b>АДМИН:</b> /admin"
+        f"👥 Рефералы, 🎰 Crash\n\n"
+        f"⚙️ <b>Основные команды:</b>\n"
+        f"/start — Открыть меню\n"
+        f"/menu — Открыть меню\n"
+        f"/admin — Админ-панель\n"
     )
     await cb.message.edit_text(text, reply_markup=back_btn())
     await cb.answer()
@@ -439,10 +429,8 @@ async def daily_bonus(cb: CallbackQuery):
     if last == today_str:
         return await cb.answer("❌ ВЫ УЖЕ ЗАБРАЛИ БОНУС СЕГОДНЯ!", show_alert=True)
     streak = user[13] if user[13] else 0
-    if last == yesterday_str:
-        streak += 1
-    else:
-        streak = 1
+    if last == yesterday_str: streak += 1
+    else: streak = 1
     if streak > 7: streak = 1
     rewards = {1: 5000, 2: 7000, 3: 10000, 4: 12000, 5: 15000, 6: 18000, 7: 25000}
     reward = rewards.get(streak, 5000)
@@ -475,11 +463,7 @@ async def wheel_spin(cb: CallbackQuery):
 # ================= КВЕСТЫ =================
 @dp.callback_query(F.data == "quests")
 async def quests_menu(cb: CallbackQuery):
-    quests = {
-        "open_1": {"name": "Открой 1 кейс", "target": 1, "reward": 2000},
-        "upgrade_1": {"name": "Сделай 1 ставку", "target": 1, "reward": 3000},
-        "ref_1": {"name": "Пригласи 1 друга", "target": 1, "reward": 5000}
-    }
+    quests = {"open_1": {"name": "Открой 1 кейс", "target": 1, "reward": 2000}, "upgrade_1": {"name": "Сделай 1 ставку", "target": 1, "reward": 3000}, "ref_1": {"name": "Пригласи 1 друга", "target": 1, "reward": 5000}}
     text = "🎯 <b>КВЕСТЫ</b>\n━━━━━━━━━━━━━━━━━━\n"
     kb = []
     async with aiosqlite.connect(DB_PATH) as db:
@@ -790,12 +774,49 @@ async def close_admin(cb: CallbackQuery):
     await cb.message.delete()
     await cb.answer()
 
-@dp.callback_query(F.data == "my_rights")
-async def my_rights(cb: CallbackQuery):
-    rank = await get_admin_rank(cb.from_user.id)
-    if rank == 3: text = "👑 <b>ДИРЕКТОР</b>\nВсе права."
-    elif rank == 2: text = "⭐ <b>ЗАМ</b>\nКупоны, промо, наказания."
-    else: text = "🛡 <b>МЛ. АДМИН</b>\nПросмотр."
+@dp.callback_query(F.data == "admin_help")
+async def admin_help(cb: CallbackQuery):
+    text = (
+        "📖 <b>СПРАВОЧНИК АДМИНИСТРАТОРА</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "👑 <b>ГЛАВНЫЕ КОМАНДЫ:</b>\n"
+        "▪️ /start — Открыть главное меню\n"
+        "▪️ /menu — Открыть главное меню\n"
+        "▪️ /admin — Открыть админ-панель\n\n"
+        "📊 <b>СТАТИСТИКА:</b>\n"
+        "Показывает общее число юзеров, активных сегодня, денег в системе и джекпот.\n\n"
+        "🎁 <b>КУПОНЫ:</b>\n"
+        "Позволяет проверить код купона, который ввел игрок, и подтвердить выдачу предмета.\n\n"
+        "🔑 <b>ПРОМО:</b>\n"
+        "Создание промокода. Вы задаете сумму награды и количество активаций. Бот выдаст код.\n\n"
+        "🚫 <b>БАНЫ:</b>\n"
+        "Бан по ID (с причиной) и разбан. Также есть список всех забаненных.\n\n"
+        "💰 <b>ВЫДАТЬ ВАЛЮТУ / ИЗМЕНИТЬ БАЛАНС:</b>\n"
+        "Начисление или списание Монет и Коэнов конкретному игроку по его ID.\n\n"
+        "🚨 <b>ПАНИКА:</b>\n"
+        "Экстренная блокировка. Запрещает открывать кейсы и играть (защита от взлома/бага).\n\n"
+        "🛠 <b>ТЕХ.РАБОТЫ:</b>\n"
+        "Бот перестает отвечать обычным юзерам (только админы могут зайти).\n\n"
+        "👥 <b>HR-ПАНЕЛЬ:</b>\n"
+        "▪️ Логи — история действий админов.\n"
+        "▪️ Назначить Зама — выдает права 2-го уровня (купоны, промо, баны).\n\n"
+        "⚙️ <b>ШАНСЫ БД / НАСТРОЙКА CRASH:</b>\n"
+        "Изменение процента победы в Блэкджеке и частоты краша в Crash-игре.\n\n"
+        "🛒 <b>МАГАЗИН:</b>\n"
+        "Изменение курса обмена Монет на Коэны.\n\n"
+        "🎁 <b>КЕЙСЫ:</b>\n"
+        "▪️ Создание новых кейсов.\n"
+        "▪️ Добавление/редактирование/удаление предметов.\n"
+        "▪️ Настройка их цены, веса и шанса выпадения.\n\n"
+        "📢 <b>РАССЫЛКА:</b>\n"
+        "Отправка сообщения всем пользователям бота.\n\n"
+        "💾 <b>БД:</b>\n"
+        "Скачивание файла базы данных (бэкап).\n\n"
+        "🎰 <b>PITY-ПОРОГ:</b>\n"
+        "Количество неудачных открытий кейса подряд, после которого игроку гарантированно падает редкий предмет (legendary/mythic).\n\n"
+        "⭐ <b>ЦЕНЫ STARS:</b>\n"
+        "Изменение цен на товары в магазине Stars/Премиум."
+    )
     await cb.message.edit_text(text, reply_markup=back_btn("close_admin"))
     await cb.answer()
 
@@ -919,7 +940,6 @@ async def delete_item(cb: CallbackQuery):
         await db.execute("DELETE FROM case_items WHERE id = ?", (item_id,))
         await db.commit()
     await cb.answer(f"✅ '{row[1]}' удалён!", show_alert=True)
-    # Перерисовываем меню кейса
     class FakeCb:
         def __init__(self, data): self.data = data; self.from_user = cb.from_user; self.message = cb.message
         async def answer(self, *a, **k): pass
@@ -1387,7 +1407,7 @@ async def main():
     await bot.delete_webhook(drop_pending_updates=True)
     asyncio.create_task(web_server())
     asyncio.create_task(keep_alive())
-    print("Бот запущен со всеми защитами и миграцией!")
+    print("Бот запущен! Все системы в норме.")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
