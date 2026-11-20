@@ -29,7 +29,6 @@ dp = Dispatcher()
 # ================= БАЗА ДАННЫХ =================
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
-        # Основная таблица
         await db.execute("""CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY, username TEXT, full_name TEXT,
             balance INTEGER DEFAULT 1000, coins INTEGER DEFAULT 0,
@@ -38,7 +37,6 @@ async def init_db():
             jackpot_contribution INTEGER DEFAULT 0, wins_count INTEGER DEFAULT 0,
             bonus_streak INTEGER DEFAULT 0)""")
         
-        # Остальные таблицы
         await db.execute("CREATE TABLE IF NOT EXISTS inventory (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, item_name TEXT, rarity TEXT, value INTEGER, is_withdrawn INTEGER DEFAULT 0)")
         await db.execute("CREATE TABLE IF NOT EXISTS coupons (code TEXT PRIMARY KEY, user_id INTEGER, item_name TEXT, status TEXT DEFAULT 'pending')")
         await db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
@@ -58,21 +56,14 @@ async def init_db():
         # Миграция таблицы users (если БД старая)
         async with db.execute("PRAGMA table_info(users)") as cur:
             columns = [row[1] for row in await cur.fetchall()]
-        needed_columns = {
-            "xp": "INTEGER DEFAULT 0", "level": "INTEGER DEFAULT 1",
-            "jackpot_contribution": "INTEGER DEFAULT 0", "wins_count": "INTEGER DEFAULT 0",
-            "bonus_streak": "INTEGER DEFAULT 0"
-        }
+        needed_columns = {"xp": "INTEGER DEFAULT 0", "level": "INTEGER DEFAULT 1", "jackpot_contribution": "INTEGER DEFAULT 0", "wins_count": "INTEGER DEFAULT 0", "bonus_streak": "INTEGER DEFAULT 0"}
         for col, col_type in needed_columns.items():
             if col not in columns:
-                logging.info(f"Добавляем колонку {col} в users")
                 await db.execute(f"ALTER TABLE users ADD COLUMN {col} {col_type}")
 
-        # Настройки по умолчанию
         defaults = [
-            ('maintenance', 'False'), ('panic', 'False'), ('bj_chance', '20'),
-            ('shop_price', '100000'), ('price_50_stars', '50'), ('price_100_stars', '100'),
-            ('price_prem3', '150'), ('price_prem6', '300'), ('price_prem12', '500'),
+            ('maintenance', 'False'), ('panic', 'False'), ('bj_chance', '20'), ('shop_price', '100000'),
+            ('price_50_stars', '50'), ('price_100_stars', '100'), ('price_prem3', '150'), ('price_prem6', '300'), ('price_prem12', '500'),
             ('jackpot_enabled', 'True'), ('crash_chance', '40'), ('pity_threshold', '30')
         ]
         for k, v in defaults:
@@ -126,28 +117,21 @@ async def add_user(user_id, username, full_name, ref_id=None):
                 await db.execute("UPDATE users SET username = ?, full_name = ? WHERE user_id = ?", (username, full_name, user_id))
             await db.commit()
 
-async def get_safe_user_data(user_id, username="", full_name=""):
-    """Возвращает словарь с гарантированными значениями. Никогда не падает."""
+async def get_user_data(user_id):
+    """Возвращает словарь с гарантированными значениями."""
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)) as cur:
                 row = await cur.fetchone()
                 if not row:
-                    await add_user(user_id, username, full_name)
-                    async with db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)) as cur2:
-                        row = await cur2.fetchone()
-                
-                if not row:
-                    # Если создать не удалось, возвращаем дефолтные значения
-                    return {"user_id": user_id, "username": username, "full_name": full_name, "balance": 1000, "coins": 0, "referrals": 0, "last_bonus": "", "xp": 0, "level": 1, "wins_count": 0, "bonus_streak": 0}
-                
-                # Безопасно извлекаем данные, подставляя 0, если пришел None
+                    return None
+                # Безопасно извлекаем данные
                 return {
                     "user_id": row[0],
-                    "username": row[1] if row[1] is not None else "",
-                    "full_name": row[2] if row[2] is not None else "Игрок",
-                    "balance": row[3] if row[3] is not None else 0,
-                    "coins": row[4] if row[4] is not None else 0,
+                    "username": row[1] or "",
+                    "full_name": row[2] or "Игрок",
+                    "balance": row[3] or 0,
+                    "coins": row[4] or 0,
                     "referrals": row[6] if len(row) > 6 and row[6] is not None else 0,
                     "last_bonus": row[7] if len(row) > 7 and row[7] is not None else "",
                     "xp": row[9] if len(row) > 9 and row[9] is not None else 0,
@@ -156,8 +140,16 @@ async def get_safe_user_data(user_id, username="", full_name=""):
                     "bonus_streak": row[13] if len(row) > 13 and row[13] is not None else 0,
                 }
     except Exception as e:
-        logging.error(f"Ошибка в get_safe_user_data: {e}")
-        return {"user_id": user_id, "username": username, "full_name": full_name, "balance": 1000, "coins": 0, "referrals": 0, "last_bonus": "", "xp": 0, "level": 1, "wins_count": 0, "bonus_streak": 0}
+        logging.error(f"Ошибка в get_user_data: {e}")
+        return None
+
+async def safe_get_user(user_id, username="", full_name=""):
+    """Пытается получить, если нет - создает и возвращает словарь."""
+    data = await get_user_data(user_id)
+    if data is None:
+        await add_user(user_id, username, full_name)
+        data = await get_user_data(user_id)
+    return data
 
 async def upd_bal(user_id, amount, is_coin=False, add_jackpot=True):
     async with aiosqlite.connect(DB_PATH) as db:
@@ -349,7 +341,7 @@ async def cmd_start(message: Message):
         ref_id = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
         if ref_id == u.id: ref_id = None
         await add_user(u.id, u.username or "", u.full_name, ref_id)
-        user = await get_safe_user_data(u.id, u.username, u.full_name)
+        user = await safe_get_user(u.id, u.username, u.full_name)
         
         if await check_achievement(u.id, "start"):
             await message.answer("🏅 <b>ДОСТИЖЕНИЕ:</b> Первый шаг!")
@@ -367,19 +359,15 @@ async def cmd_start(message: Message):
 
 @dp.callback_query(F.data == "back_main")
 async def back_main(cb: CallbackQuery):
-    try:
-        user = await get_safe_user_data(cb.from_user.id, cb.from_user.username, cb.from_user.full_name)
-        text = (
-            f"🏠 <b>ГЛАВНОЕ МЕНЮ</b>\n━━━━━━━━━━━━━━━━━━\n"
-            f"💰 <b>Монеты:</b> {user['balance']}\n💎 <b>Коэны:</b> {user['coins']}\n"
-            f"⭐ <b>Уровень:</b> {user['level']} (XP: {user['xp']})\n"
-            f"🔥 <b>Серия бонусов:</b> {user['bonus_streak']} дн.\n━━━━━━━━━━━━━━━━━━"
-        )
-        await cb.message.edit_text(text, reply_markup=main_menu(cb.from_user.id))
-        await cb.answer()
-    except Exception as e:
-        logging.error(f"Ошибка в back_main: {e}")
-        await cb.answer("⚠️ Ошибка, попробуйте /menu")
+    user = await safe_get_user(cb.from_user.id, cb.from_user.username, cb.from_user.full_name)
+    text = (
+        f"🏠 <b>ГЛАВНОЕ МЕНЮ</b>\n━━━━━━━━━━━━━━━━━━\n"
+        f"💰 <b>Монеты:</b> {user['balance']}\n💎 <b>Коэны:</b> {user['coins']}\n"
+        f"⭐ <b>Уровень:</b> {user['level']} (XP: {user['xp']})\n"
+        f"🔥 <b>Серия бонусов:</b> {user['bonus_streak']} дн.\n━━━━━━━━━━━━━━━━━━"
+    )
+    await cb.message.edit_text(text, reply_markup=main_menu(cb.from_user.id))
+    await cb.answer()
 
 @dp.callback_query(F.data == "about")
 async def about_bot(cb: CallbackQuery):
@@ -405,7 +393,7 @@ async def commands_menu(cb: CallbackQuery):
 
 @dp.callback_query(F.data == "prof")
 async def prof(cb: CallbackQuery):
-    user = await get_safe_user_data(cb.from_user.id, cb.from_user.username, cb.from_user.full_name)
+    user = await safe_get_user(cb.from_user.id, cb.from_user.username, cb.from_user.full_name)
     achievements_count = 0
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT COUNT(*) FROM achievements WHERE user_id = ?", (cb.from_user.id,)) as cur:
@@ -442,7 +430,7 @@ async def achievements_menu(cb: CallbackQuery):
 async def ref(cb: CallbackQuery):
     bot_info = await bot.get_me()
     link = f"https://t.me/{bot_info.username}?start={cb.from_user.id}"
-    user = await get_safe_user_data(cb.from_user.id, cb.from_user.username, cb.from_user.full_name)
+    user = await safe_get_user(cb.from_user.id, cb.from_user.username, cb.from_user.full_name)
     text = f"👥 <b>РЕФЕРАЛЫ</b>\n━━━━━━━━━━━━━━━━━━\nПригласи 3 друзей и получи доступ к выводу!\nВаши рефералы: {user['referrals']}/3\n\n🔗 <b>Твоя ссылка:</b>\n<code>{link}</code>"
     await cb.message.edit_text(text, reply_markup=back_btn())
     await cb.answer()
@@ -460,7 +448,7 @@ async def top_players(cb: CallbackQuery):
 # ================= STREAK-БОНУС =================
 @dp.callback_query(F.data == "daily_bonus")
 async def daily_bonus(cb: CallbackQuery):
-    user = await get_safe_user_data(cb.from_user.id, cb.from_user.username, cb.from_user.full_name)
+    user = await safe_get_user(cb.from_user.id, cb.from_user.username, cb.from_user.full_name)
     today = datetime.date.today()
     today_str = str(today)
     yesterday_str = str(today - datetime.timedelta(days=1))
@@ -559,7 +547,7 @@ async def crash_game(cb: CallbackQuery, state: FSMContext):
 async def crash_bet(message: Message, state: FSMContext):
     if not message.text.isdigit(): return await message.answer("❌ ВВЕДИ ЧИСЛО!")
     bet = int(message.text)
-    user = await get_safe_user_data(message.from_user.id, message.from_user.username, message.from_user.full_name)
+    user = await safe_get_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
     if user['balance'] < bet: return await message.answer("❌ НЕДОСТАТОЧНО МОНЕТ!")
     await state.update_data(bet=bet)
     await upd_bal(message.from_user.id, -bet)
@@ -647,7 +635,7 @@ async def open_coins(cb: CallbackQuery):
     cases = await get_cases()
     if key not in cases: return await cb.answer("Ошибка", show_alert=True)
     case = cases[key]
-    user = await get_safe_user_data(cb.from_user.id, cb.from_user.username, cb.from_user.full_name)
+    user = await safe_get_user(cb.from_user.id, cb.from_user.username, cb.from_user.full_name)
     if user['coins'] < case["coin_price"]: return await cb.answer("❌ НЕДОСТАТОЧНО КОЭНОВ!", show_alert=True)
     await upd_bal(cb.from_user.id, -case["coin_price"], is_coin=True)
     msg = await play_animation(cb.message, case['name'])
@@ -668,7 +656,7 @@ async def open_mon(cb: CallbackQuery):
     cases = await get_cases()
     if key not in cases: return await cb.answer("Ошибка", show_alert=True)
     case = cases[key]
-    user = await get_safe_user_data(cb.from_user.id, cb.from_user.username, cb.from_user.full_name)
+    user = await safe_get_user(cb.from_user.id, cb.from_user.username, cb.from_user.full_name)
     if user['balance'] < case["mon_price"]: return await cb.answer("❌ НЕДОСТАТОЧНО МОНЕТ!", show_alert=True)
     await upd_bal(cb.from_user.id, -case["mon_price"], is_coin=False)
     msg = await play_animation(cb.message, case['name'])
@@ -720,7 +708,7 @@ async def sell(cb: CallbackQuery):
 @dp.callback_query(F.data.startswith("withdraw_"))
 async def withdraw(cb: CallbackQuery):
     item_id = int(cb.data.split("_")[1])
-    user = await get_safe_user_data(cb.from_user.id, cb.from_user.username, cb.from_user.full_name)
+    user = await safe_get_user(cb.from_user.id, cb.from_user.username, cb.from_user.full_name)
     if user['referrals'] < 3: return await cb.answer(f"❌ НУЖНО 3 РЕФЕРАЛА! У тебя: {user['referrals']}/3", show_alert=True)
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT item_name FROM inventory WHERE id = ?", (item_id,)) as cur:
@@ -757,7 +745,7 @@ async def game_bet(cb: CallbackQuery, state: FSMContext):
 async def play_game(message: Message, state: FSMContext):
     if not message.text.isdigit(): return await message.answer("❌ ВВЕДИ ЧИСЛО!")
     bet = int(message.text)
-    user = await get_safe_user_data(message.from_user.id, message.from_user.username, message.from_user.full_name)
+    user = await safe_get_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
     if user['balance'] < bet: return await message.answer("❌ НЕДОСТАТОЧНО МОНЕТ!")
     data = await state.get_data()
     game = data.get("game")
