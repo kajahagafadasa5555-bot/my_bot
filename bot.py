@@ -130,10 +130,11 @@ def main_menu(user_id):
     kb = [
         [InlineKeyboardButton(text="🎁 КЕЙСЫ", callback_data="cases"), InlineKeyboardButton(text="🎮 ИГРЫ", callback_data="games")],
         [InlineKeyboardButton(text="🎯 КВЕСТЫ", callback_data="quests"), InlineKeyboardButton(text="🎁 БОНУС", callback_data="daily_bonus")],
-        [InlineKeyboardButton(text="🛒 МАГАЗИН", callback_data="shop"), InlineKeyboardButton(text="🎒 ИНВЕНТАРЬ", callback_data="inv")],
-        [InlineKeyboardButton(text="👤 ПРОФИЛЬ", callback_data="prof"), InlineKeyboardButton(text="🏆 ТОП", callback_data="top_players")],
-        [InlineKeyboardButton(text="🔑 ПРОМОКОД", callback_data="promo"), InlineKeyboardButton(text="👥 РЕФЕРАЛЫ", callback_data="ref")],
-        [InlineKeyboardButton(text="📜 КОМАНДЫ", callback_data="commands"), InlineKeyboardButton(text="ℹ️ О БОТЕ", callback_data="about")]
+        [InlineKeyboardButton(text="🛒 МАГАЗИН", callback_data="shop"), InlineKeyboardButton(text="⭐ STARS/ПРЕМКА", callback_data="buy_stars")],
+        [InlineKeyboardButton(text="🎒 ИНВЕНТАРЬ", callback_data="inv"), InlineKeyboardButton(text="👤 ПРОФИЛЬ", callback_data="prof")],
+        [InlineKeyboardButton(text="🏆 ТОП", callback_data="top_players"), InlineKeyboardButton(text="🔑 ПРОМОКОД", callback_data="promo")],
+        [InlineKeyboardButton(text="👥 РЕФЕРАЛЫ", callback_data="ref"), InlineKeyboardButton(text="ℹ️ О БОТЕ", callback_data="about")],
+        [InlineKeyboardButton(text="📜 КОМАНДЫ", callback_data="commands")]
     ]
     if user_id in ADMIN_IDS:
         kb.append([InlineKeyboardButton(text="👑 АДМИН ПАНЕЛЬ", callback_data="admin_panel")])
@@ -161,6 +162,7 @@ def admin_menu(rank):
 class UserState(StatesGroup):
     waiting_promo = State()
     waiting_bet = State()
+    waiting_coin_amount = State()
 
 class AdminState(StatesGroup):
     waiting_coupon = State()
@@ -227,7 +229,8 @@ async def commands_menu(cb: CallbackQuery):
         f"🎯 <b>Квесты</b> — Выполняй задания и получай монеты.\n"
         f"🎁 <b>Бонус</b> — Ежедневный бонус (раз в 24 часа).\n"
         f"🛒 <b>Магазин</b> — Обмен Монет на Коэны.\n"
-        f"🎒 <b>Инвентарь</b> — Просмотр и продажа предметов.\n"
+        f"⭐ <b>Stars</b> — Покупка звезд и премиума.\n"
+        f"🎒 <b>Инвентарь</b> — Просмотр, продажа и вывод предметов.\n"
         f"👤 <b>Профиль</b> — Твой ID и баланс.\n"
         f"🏆 <b>Топ</b> — Лучшие игроки по балансу.\n"
         f"🔑 <b>Промокод</b> — Активация бонусного кода.\n"
@@ -246,31 +249,18 @@ async def admin_panel(cb: CallbackQuery):
 
 @dp.callback_query(F.data == "ping_bot")
 async def ping_bot(cb: CallbackQuery):
-    await cb.answer("🟢 Я ЖИВ! Бот работает, база данных в порядке.", show_alert=True)
+    await cb.answer("🟢 Я ЖИВ! Бот работает.", show_alert=True)
 
 @dp.callback_query(F.data == "about")
 async def about_bot(cb: CallbackQuery):
-    text = (
-        f"ℹ️ <b>О БОТЕ CASEHAB</b>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"Лучший бот для открытия кейсов!\n\n"
-        f"📩 <b>Поддержка:</b> {CONTACT_ADMIN}"
-    )
+    text = f"ℹ️ <b>О БОТЕ CASEHAB</b>\n━━━━━━━━━━━━━━━━━━\nЛучший бот для открытия кейсов!\n\n📩 <b>Поддержка:</b> {CONTACT_ADMIN}"
     await cb.message.edit_text(text, reply_markup=back_btn())
     await cb.answer()
 
 @dp.callback_query(F.data == "prof")
 async def prof(cb: CallbackQuery):
     user = await get_user(cb.from_user.id)
-    text = (
-        f"👤 <b>ПРОФИЛЬ</b>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"🆔 <b>ID:</b> <code>{user[0]}</code>\n"
-        f"💰 <b>Монеты:</b> {user[3]}\n"
-        f"💎 <b>Коэны:</b> {user[4]}\n"
-        f"👥 <b>Рефералы:</b> {user[6]}/3\n"
-        f"━━━━━━━━━━━━━━━━━━"
-    )
+    text = f"👤 <b>ПРОФИЛЬ</b>\n━━━━━━━━━━━━━━━━━━\n🆔 <b>ID:</b> <code>{user[0]}</code>\n💰 <b>Монеты:</b> {user[3]}\n💎 <b>Коэны:</b> {user[4]}\n👥 <b>Рефералы:</b> {user[6]}/3\n━━━━━━━━━━━━━━━━━━"
     await cb.message.edit_text(text, reply_markup=back_btn())
     await cb.answer()
 
@@ -278,12 +268,7 @@ async def prof(cb: CallbackQuery):
 async def ref(cb: CallbackQuery):
     bot_info = await bot.get_me()
     link = f"https://t.me/{bot_info.username}?start={cb.from_user.id}"
-    text = (
-        f"👥 <b>РЕФЕРАЛЫ</b>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"Пригласи 3 друзей и получи доступ к выводу!\n\n"
-        f"🔗 <b>Твоя ссылка:</b>\n<code>{link}</code>"
-    )
+    text = f"👥 <b>РЕФЕРАЛЫ</b>\n━━━━━━━━━━━━━━━━━━\nПригласи 3 друзей и получи доступ к выводу!\n\n🔗 <b>Твоя ссылка:</b>\n<code>{link}</code>"
     await cb.message.edit_text(text, reply_markup=back_btn())
     await cb.answer()
 
@@ -293,8 +278,7 @@ async def top_players(cb: CallbackQuery):
         async with db.execute("SELECT full_name, balance FROM users ORDER BY balance DESC LIMIT 5") as cur:
             tops = await cur.fetchall()
     text = "🏆 <b>ТОП 5 ИГРОКОВ</b>\n━━━━━━━━━━━━━━━━━━\n"
-    for i, (name, bal) in enumerate(tops, 1): 
-        text += f"{i}. <b>{name}</b> — {bal} 💰\n"
+    for i, (name, bal) in enumerate(tops, 1): text += f"{i}. <b>{name}</b> — {bal} 💰\n"
     await cb.message.edit_text(text, reply_markup=back_btn())
     await cb.answer()
 
@@ -302,41 +286,48 @@ async def top_players(cb: CallbackQuery):
 async def daily_bonus(cb: CallbackQuery):
     user = await get_user(cb.from_user.id)
     today = str(datetime.date.today())
-    if user[7] == today:
-        return await cb.answer("❌ ВЫ УЖЕ ЗАБРАЛИ БОНУС СЕГОДНЯ!", show_alert=True)
-    
+    if user[7] == today: return await cb.answer("❌ ВЫ УЖЕ ЗАБРАЛИ БОНУС СЕГОДНЯ!", show_alert=True)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE users SET balance = balance + 5000, last_bonus = ? WHERE user_id = ?", (today, cb.from_user.id))
         await db.commit()
     await cb.answer("✅ ВЫ ПОЛУЧИЛИ 5000 МОНЕТ!", show_alert=True)
     await back_main(cb)
 
-@dp.callback_query(F.data == "quests")
-async def quests_menu(cb: CallbackQuery):
-    text = (
-        f"🎯 <b>КВЕСТЫ</b>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"▪️ Открой 1 кейс — 2000💰\n"
-        f"▪️ Сделай 1 апгрейд — 3000💰\n"
-        f"▪️ Пригласи друга — 5000💰\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"(В разработке, скоро заработает)"
-    )
-    await cb.message.edit_text(text, reply_markup=back_btn())
-    await cb.answer()
-
+# ================= МАГАЗИН И КВЕСТЫ =================
 @dp.callback_query(F.data == "shop")
 async def shop_menu(cb: CallbackQuery):
     price = await get_setting("shop_price")
-    text = (
-        f"🛒 <b>МАГАЗИН</b>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"Обмен Монет на Коэны.\n\n"
-        f"💱 <b>Курс:</b> {price} Монет = 10 Коэнов\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"(Введите сумму Коэнов, которую хотите купить)"
-    )
+    text = f"🛒 <b>МАГАЗИН</b>\n━━━━━━━━━━━━━━━━━━\nОбмен Монет на Коэны.\n\n💱 <b>Курс:</b> {price} Монет = 10 Коэнов\n\nВведите количество Коэнов:"
     await cb.message.edit_text(text, reply_markup=back_btn())
+    await cb.answer()
+
+@dp.callback_query(F.data == "quests")
+async def quests_menu(cb: CallbackQuery):
+    # Заглушка для квестов
+    text = "🎯 <b>КВЕСТЫ</b>\n━━━━━━━━━━━━━━━━━━\n▪️ Открой 1 кейс — 2000💰\n▪️ Сделай 1 апгрейд — 3000💰\n▪️ Пригласи друга — 5000💰\n\n(Скоро заработает полностью)"
+    await cb.message.edit_text(text, reply_markup=back_btn())
+    await cb.answer()
+
+# ================= ПОКУПКА ЗВЕЗД =================
+@dp.callback_query(F.data == "buy_stars")
+async def buy_stars_menu(cb: CallbackQuery):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⭐ 50 Stars — 50 руб", callback_data="buy_50_stars")],
+        [InlineKeyboardButton(text="⭐ 100 Stars — 100 руб", callback_data="buy_100_stars")],
+        [InlineKeyboardButton(text="👑 Премиум 3 мес — 150 Stars", callback_data="buy_prem3")],
+        [InlineKeyboardButton(text="👑 Премиум 6 мес — 300 Stars", callback_data="buy_prem6")],
+        [InlineKeyboardButton(text="👑 Премиум 12 мес — 500 Stars", callback_data="buy_prem12")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")]
+    ])
+    await cb.message.edit_text("⭐ <b>Магазин Stars и Премиума</b>\n\nВыберите товар:\n(Оплата в рублях на карту)", reply_markup=kb)
+    await cb.answer()
+
+@dp.callback_query(F.data.startswith("buy_"))
+async def process_buy_stars(cb: CallbackQuery, state: FSMContext):
+    item = cb.data.split("_")[1]
+    names = {"50": "50 Stars", "100": "100 Stars", "prem3": "Премиум 3 месяца", "prem6": "Премиум 6 месяцев", "prem12": "Премиум 12 месяцев"}
+    name = names.get(item, "Товар")
+    await cb.message.edit_text(f"⭐ <b>Покупка: {name}</b>\n\nПереведите сумму на карту:\n<code>{CARD_NUMBER}</code> ({CARD_BANK})\n\n📩 <b>Отправьте чек:</b> {CONTACT_ADMIN}", reply_markup=back_btn("buy_stars"))
     await cb.answer()
 
 # --- КЕЙСЫ ---
@@ -417,7 +408,7 @@ async def inv(cb: CallbackQuery):
     kb = []
     for i, name, val in items: 
         text += f"▪️ {name} ({val}⭐)\n"
-        kb.append([InlineKeyboardButton(text=f"💸 ПРОДАТЬ {name} ({val})", callback_data=f"sell_{i}")])
+        kb.append([InlineKeyboardButton(text=f"💸 ПРОДАТЬ", callback_data=f"sell_{i}"), InlineKeyboardButton(text=f"📦 ВЫВЕСТИ", callback_data=f"withdraw_{i}")])
     kb.append([InlineKeyboardButton(text="◀️ НАЗАД", callback_data="back_main")])
     await cb.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
     await cb.answer()
@@ -434,6 +425,23 @@ async def sell(cb: CallbackQuery):
     await cb.answer(f"✅ ПРОДАНО ЗА {val} МОНЕТ!", show_alert=True)
     await inv(cb)
 
+@dp.callback_query(F.data.startswith("withdraw_"))
+async def withdraw(cb: CallbackQuery):
+    item_id = int(cb.data.split("_")[1])
+    user = await get_user(cb.from_user.id)
+    if user[6] < 3:
+        return await cb.answer(f"❌ НУЖНО 3 РЕФЕРАЛА! У тебя: {user[6]}/3", show_alert=True)
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT item_name FROM inventory WHERE id = ?", (item_id,)) as cur:
+            item_name = (await cur.fetchone())[0]
+        code = gen_code(8)
+        await db.execute("INSERT INTO coupons (code, user_id, item_name) VALUES (?, ?, ?)", (code, cb.from_user.id, item_name))
+        await db.execute("UPDATE inventory SET is_withdrawn = 1 WHERE id = ?", (item_id,))
+        await db.commit()
+    await cb.message.edit_text(f"🎉 <b>КУПОН СОЗДАН!</b>\n\nКод: <code>{code}</code>\nОтправь его админу: {CONTACT_ADMIN}", reply_markup=back_btn("inv"))
+    await cb.answer()
+
+# ================= ИГРЫ =================
 @dp.callback_query(F.data == "games")
 async def games(cb: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -487,7 +495,7 @@ async def promo_check(message: Message, state: FSMContext):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT reward, uses_left FROM promo_codes WHERE code = ?", (code,)) as cur:
             promo = await cur.fetchone()
-        if not promo or promo[1] <= 0: return await message.answer("❌ НЕВЕРНЫЙ ИЛИ ИСПОЛЬЗОВАННЫЙ ПРОМОКОД.", reply_markup=main_menu(message.from_user.id))
+        if not promo or promo[1] <= 0: return await message.answer("❌ НЕВЕРНЫЙ ПРОМОКОД.", reply_markup=main_menu(message.from_user.id))
         await db.execute("UPDATE promo_codes SET uses_left = uses_left - 1 WHERE code = ?", (code,))
         await db.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (promo[0], message.from_user.id))
         await db.commit()
@@ -577,17 +585,176 @@ async def admin_edit_bal_amount(message: Message, state: FSMContext):
     edit_type = data.get('edit_type')
     edit_action = data.get('edit_action')
     await state.clear()
-    
     is_coin = (edit_type == "coins")
     final_amount = amount if edit_action == "add" else -amount
-    
     await upd_bal(target_id, final_amount, is_coin=is_coin)
-    
     action_text = "НАЧИСЛЕНО" if edit_action == "add" else "СПИСАНО"
     curr_text = "КОЭНОВ" if is_coin else "МОНЕТ"
     await message.answer(f"✅ {action_text} {amount} {curr_text} ПОЛЬЗОВАТЕЛЮ {target_id}.", reply_markup=admin_menu(3))
-    try: await bot.send_message(target_id, f"👑 Администратор {action_text.lower()} вам {amount} {curr_text}.")
+
+@dp.callback_query(F.data == "admin_coupon")
+async def admin_coupon(cb: CallbackQuery, state: FSMContext):
+    if await get_admin_rank(cb.from_user.id) < 2: return await cb.answer("Нет прав!", show_alert=True)
+    await cb.message.edit_text("Отправьте код купона:", reply_markup=back_btn("close_admin"))
+    await state.set_state(AdminState.waiting_coupon)
+    await cb.answer()
+
+@dp.message(AdminState.waiting_coupon)
+async def admin_check_coupon(message: Message, state: FSMContext):
+    if await get_admin_rank(message.from_user.id) < 2: return
+    code = message.text.strip().upper()
+    await state.clear()
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT c.user_id, c.item_name, u.full_name, c.status FROM coupons c JOIN users u ON c.user_id = u.user_id WHERE c.code = ?", (code,)) as cur:
+            info = await cur.fetchone()
+    if not info: return await message.answer("❌ Купон не найден.", reply_markup=main_menu(message.from_user.id))
+    uid, item, name, status = info
+    if status == 'given': return await message.answer("⚠️ Купон УЖЕ ВЫДАН!", reply_markup=main_menu(message.from_user.id))
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Я выдал подарок", callback_data=f"givecoupon_{code}")]])
+    await message.answer(f"🔍 <b>Купон:</b>\n👤 {name} ({uid})\n🎁 {item}\n\nВыдать?", reply_markup=kb)
+
+@dp.callback_query(F.data.startswith("givecoupon_"))
+async def admin_give_coupon(cb: CallbackQuery):
+    if await get_admin_rank(cb.from_user.id) < 2: return
+    code = cb.data.split("_")[1]
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE coupons SET status = 'given' WHERE code = ?", (code,))
+        await db.commit()
+        async with db.execute("SELECT user_id FROM coupons WHERE code = ?", (code,)) as cur:
+            uid = (await cur.fetchone())[0]
+    await cb.message.edit_text(f"✅ Купон {code} погашен!")
+    try: await bot.send_message(uid, f"🎉 Твой подарок выдан! Купон {code} погашен.")
     except: pass
+    await cb.answer()
+
+@dp.callback_query(F.data == "admin_promo")
+async def admin_promo(cb: CallbackQuery, state: FSMContext):
+    if await get_admin_rank(cb.from_user.id) < 2: return
+    await cb.message.edit_text("Введите сумму награды:", reply_markup=back_btn("close_admin"))
+    await state.set_state(AdminState.waiting_promo_val)
+    await cb.answer()
+
+@dp.message(AdminState.waiting_promo_val)
+async def admin_promo_val(message: Message, state: FSMContext):
+    if not message.text.isdigit(): return
+    await state.update_data(val=int(message.text))
+    await message.answer("Введите количество активаций:")
+    await state.set_state(AdminState.waiting_promo_uses)
+
+@dp.message(AdminState.waiting_promo_uses)
+async def admin_promo_uses(message: Message, state: FSMContext):
+    if not message.text.isdigit(): return
+    data = await state.get_data()
+    code = gen_code(8)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT INTO promo_codes (code, reward, uses_left) VALUES (?, ?, ?)", (code, data['val'], int(message.text)))
+        await db.commit()
+    await message.answer(f"✅ Промокод: <code>{code}</code>\nСумма: {data['val']}\nАктиваций: {message.text}", reply_markup=main_menu(message.from_user.id))
+    await state.clear()
+
+@dp.callback_query(F.data == "admin_shop")
+async def admin_shop(cb: CallbackQuery, state: FSMContext):
+    if await get_admin_rank(cb.from_user.id) != 3: return
+    price = await get_setting("shop_price")
+    await cb.message.edit_text(f"Текущая цена: {price} Монет за 10 Коэнов.\n\nВведите новую цену:", reply_markup=back_btn("close_admin"))
+    await state.set_state(AdminState.waiting_shop_price)
+    await cb.answer()
+
+@dp.message(AdminState.waiting_shop_price)
+async def admin_set_shop(message: Message, state: FSMContext):
+    if not message.text.isdigit(): return await message.answer("Введите число!")
+    await set_setting("shop_price", message.text)
+    await message.answer(f"✅ Цена обновлена: {message.text} Монет за 10 Коэнов.", reply_markup=main_menu(message.from_user.id))
+    await state.clear()
+
+@dp.callback_query(F.data == "admin_odds")
+async def admin_odds(cb: CallbackQuery, state: FSMContext):
+    if await get_admin_rank(cb.from_user.id) != 3: return
+    await cb.message.edit_text("Введите новый шанс Блэкджека (в %):", reply_markup=back_btn("close_admin"))
+    await state.set_state(AdminState.waiting_bj_chance)
+    await cb.answer()
+
+@dp.message(AdminState.waiting_bj_chance)
+async def set_bj_chance(message: Message, state: FSMContext):
+    if not message.text.isdigit(): return await message.answer("Введите число!")
+    await set_setting("bj_chance", message.text)
+    await message.answer(f"✅ Шанс БД: {message.text}%", reply_markup=main_menu(message.from_user.id))
+    await state.clear()
+
+@dp.callback_query(F.data == "admin_staff")
+async def admin_staff(cb: CallbackQuery):
+    if await get_admin_rank(cb.from_user.id) != 3: return
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📜 Логи действий", callback_data="hr_logs")],
+        [InlineKeyboardButton(text="⬆️ Назначить Зама", callback_data="hr_set_staff")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="close_admin")]
+    ])
+    await cb.message.edit_text("👥 <b>HR-Панель</b>", reply_markup=kb)
+    await cb.answer()
+
+@dp.callback_query(F.data == "hr_logs")
+async def hr_logs(cb: CallbackQuery):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT admin_id, action, details, timestamp FROM hr_logs ORDER BY id DESC LIMIT 15") as cur:
+            logs = await cur.fetchall()
+    if not logs: return await cb.message.edit_text("Логов пока нет.", reply_markup=back_btn("admin_staff"))
+    text = "📜 <b>Последние действия:</b>\n\n"
+    for log in logs: text += f"👤 {log[0]} | {log[1]}\n📝 {log[2]}\n🕒 {log[3][:16]}\n\n"
+    await cb.message.edit_text(text, reply_markup=back_btn("admin_staff"))
+    await cb.answer()
+
+@dp.callback_query(F.data == "hr_set_staff")
+async def hr_set_staff_prompt(cb: CallbackQuery, state: FSMContext):
+    if await get_admin_rank(cb.from_user.id) != 3: return
+    await cb.message.edit_text("Введите ID пользователя, чтобы назначить его Замом:", reply_markup=back_btn("admin_staff"))
+    await state.set_state(AdminState.waiting_staff_id)
+    await cb.answer()
+
+@dp.message(AdminState.waiting_staff_id)
+async def hr_set_staff_save(message: Message, state: FSMContext):
+    if not message.text.isdigit(): return await message.answer("Введите число!")
+    uid = int(message.text)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT OR REPLACE INTO admins (user_id, rank) VALUES (?, 2)", (uid,))
+        await db.commit()
+    await message.answer(f"✅ Пользователь {uid} назначен Заместителем!", reply_markup=main_menu(message.from_user.id))
+    await state.clear()
+    try: await bot.send_message(uid, "👑 Вам выданы права Заместителя! Напишите /admin")
+    except: pass
+
+@dp.callback_query(F.data == "admin_bans")
+async def admin_bans(cb: CallbackQuery):
+    if await get_admin_rank(cb.from_user.id) < 2: return
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚫 Забанить", callback_data="ban_user")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="close_admin")]
+    ])
+    await cb.message.edit_text("🛠 <b>Управление наказаниями</b>", reply_markup=kb)
+    await cb.answer()
+
+@dp.callback_query(F.data == "ban_user")
+async def ban_user(cb: CallbackQuery, state: FSMContext):
+    await cb.message.edit_text("Введите ID пользователя для бана:", reply_markup=back_btn("admin_bans"))
+    await state.set_state(AdminState.waiting_ban_id)
+    await cb.answer()
+
+@dp.message(AdminState.waiting_ban_id)
+async def ban_user_id(message: Message, state: FSMContext):
+    if not message.text.isdigit(): return
+    await state.update_data(uid=int(message.text))
+    await message.answer("Введите причину бана:")
+    await state.set_state(AdminState.waiting_ban_reason)
+
+@dp.message(AdminState.waiting_ban_reason)
+async def ban_user_reason(message: Message, state: FSMContext):
+    data = await state.get_data()
+    uid = data['uid']
+    reason = message.text
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT OR REPLACE INTO bans (user_id, reason) VALUES (?, ?)", (uid, reason))
+        await db.commit()
+    await message.answer(f"✅ Пользователь {uid} забанен.", reply_markup=main_menu(message.from_user.id))
+    await state.clear()
 
 # ================= АНТИ-СОН =================
 async def keep_alive():
@@ -595,7 +762,7 @@ async def keep_alive():
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("SELECT 1")
             await db.commit()
-        await asyncio.sleep(600) # 10 минут
+        await asyncio.sleep(600)
 
 # ================= ЗАПУСК =================
 async def web_server():
@@ -611,7 +778,7 @@ async def main():
     await init_db()
     await bot.delete_webhook(drop_pending_updates=True)
     asyncio.create_task(web_server())
-    asyncio.create_task(keep_alive()) # Запуск таймера анти-сна
+    asyncio.create_task(keep_alive())
     print("Бот запущен!")
     await dp.start_polling(bot)
 
